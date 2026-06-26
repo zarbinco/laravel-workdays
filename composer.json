@@ -1,0 +1,39 @@
+{
+    "name": "zarbinco/laravel-workdays",
+    "description": "Laravel-first workday and business-day calculation engine.",
+    "type": "library",
+    "license": "MIT",
+    "autoload": {
+        "psr-4": {
+            "Zarbinco\\LaravelWorkdays\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Zarbinco\\LaravelWorkdays\\Tests\\": "tests/"
+        }
+    },
+    "require": {
+        "php": "^8.2",
+        "illuminate/support": "^10.0|^11.0|^12.0|^13.0",
+        "nesbot/carbon": "^2.72|^3.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^8.0|^9.0|^10.0|^11.0",
+        "phpunit/phpunit": "^10.5|^11.0|^12.0"
+    },
+    "scripts": {
+        "test": "vendor/bin/phpunit"
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Zarbinco\\LaravelWorkdays\\WorkdaysServiceProvider"
+            ],
+            "aliases": {
+                "Workday": "Zarbinco\\LaravelWorkdays\\Facades\\Workday"
+            }
+        }
+    },
+    "minimum-stability": "stable"
+}
