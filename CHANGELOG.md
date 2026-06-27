@@ -4,6 +4,11 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added `DayInfo` and `DayReason` value objects for date explainability.
+- Added `explain()` on the facade/default profile and profile calculators.
+- Added reason reporting for weekends, recurring Gregorian/Jalali/Hijri holidays, custom holidays, and extra working days.
+- Added override reporting so extra working days can show which weekend or holiday reasons they superseded.
+- Added explainability tests and README examples.
 - Hardened the v1.0.0 release surface with an explicit Laravel/PHP CI matrix.
 - Narrowed declared Laravel support to Laravel 12 and 13 so Composer metadata matches secure, installable CI coverage.
 - Improved migration publishing to use Laravel's package migration publishing helper when available.

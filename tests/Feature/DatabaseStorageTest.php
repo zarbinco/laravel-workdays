@@ -239,6 +239,61 @@ final class DatabaseStorageTest extends TestCase
         $this->assertTrue($calculator->isWeekend('2026-06-27'));
     }
 
+    public function test_explain_returns_database_custom_holiday_reason(): void
+    {
+        $this->setStorageDriver('database');
+        $this->createSpecialDate('global', '2026-06-29', 'holiday', 'Database company holiday');
+
+        $info = Workday::profile('global')->explain('2026-06-29');
+        $reason = $info->toArray()['reasons'][0];
+
+        $this->assertFalse($info->isBusinessDay);
+        $this->assertTrue($info->isCustomHoliday);
+        $this->assertSame('custom_holiday', $reason['type']);
+        $this->assertSame('Database company holiday', $reason['title']);
+        $this->assertSame('database', $reason['source']);
+        $this->assertSame('2026-06-29', $reason['key']);
+    }
+
+    public function test_explain_returns_database_extra_working_day_reason(): void
+    {
+        $this->setStorageDriver('database');
+        $this->createSpecialDate('global', '2026-06-27', 'working_day', 'Database working day');
+
+        $info = Workday::profile('global')->explain('2026-06-27');
+        $reasons = $info->toArray()['reasons'];
+        $extraWorkingDayReason = $this->reason($reasons, 'extra_working_day');
+        $weekendReason = $this->reason($reasons, 'weekend');
+
+        $this->assertTrue($info->isBusinessDay);
+        $this->assertFalse($info->isNonWorkingDay);
+        $this->assertTrue($info->isWeekend);
+        $this->assertTrue($info->isExtraWorkingDay);
+        $this->assertSame('Database working day', $extraWorkingDayReason['title']);
+        $this->assertSame('database', $extraWorkingDayReason['source']);
+        $this->assertTrue($weekendReason['overridden']);
+        $this->assertSame('extra_working_day', $weekendReason['overridden_by']);
+    }
+
+    public function test_explain_with_chain_storage_prefers_database_detail_when_both_exist(): void
+    {
+        $this->setStorageDriver('chain');
+        $this->setProfileConfig('global', [
+            'custom_holidays' => [
+                '2026-06-29' => 'Config holiday',
+            ],
+        ]);
+        $this->createSpecialDate('global', '2026-06-29', 'holiday', 'Database holiday');
+
+        $info = Workday::profile('global')->explain('2026-06-29');
+        $reason = $this->reason($info->toArray()['reasons'], 'custom_holiday');
+
+        $this->assertFalse($info->isBusinessDay);
+        $this->assertTrue($info->isCustomHoliday);
+        $this->assertSame('Database holiday', $reason['title']);
+        $this->assertSame('database', $reason['source']);
+    }
+
     private function setStorageDriver(string $driver): void
     {
         config()->set('workdays.storage.driver', $driver);
@@ -267,14 +322,29 @@ final class DatabaseStorageTest extends TestCase
         ]);
     }
 
-    private function createSpecialDate(string $profile, string $date, string $type): WorkdaySpecialDate
+    private function createSpecialDate(string $profile, string $date, string $type, string $title = 'Database special date'): WorkdaySpecialDate
     {
         return WorkdaySpecialDate::create([
             'profile' => $profile,
             'date' => $date,
             'type' => $type,
-            'title' => 'Database special date',
+            'title' => $title,
             'is_active' => true,
         ]);
+    }
+
+    /**
+     * @param  array<int, array<string, mixed>>  $reasons
+     * @return array<string, mixed>
+     */
+    private function reason(array $reasons, string $type): array
+    {
+        foreach ($reasons as $reason) {
+            if (($reason['type'] ?? null) === $type) {
+                return $reason;
+            }
+        }
+
+        $this->fail(sprintf('Day reason [%s] was not found.', $type));
     }
 }

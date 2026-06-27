@@ -10,6 +10,7 @@ use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
@@ -42,6 +43,11 @@ final class WorkdayManager
     public function isBusinessDay(string|DateTimeInterface $date): bool
     {
         return $this->defaultCalculator()->isBusinessDay($date);
+    }
+
+    public function explain(string|DateTimeInterface $date): DayInfo
+    {
+        return $this->defaultCalculator()->explain($date);
     }
 
     public function isHoliday(string|DateTimeInterface $date): bool

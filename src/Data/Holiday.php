@@ -10,7 +10,7 @@ final readonly class Holiday
 {
     public function __construct(
         public CarbonImmutable $date,
-        public string $name,
+        public ?string $name,
         public string $source = 'custom',
     ) {}
 }

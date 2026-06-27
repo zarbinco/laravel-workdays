@@ -9,6 +9,7 @@ use Zarbinco\LaravelWorkdays\WorkdayManager;
 
 /**
  * @method static \Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator profile(string $profile)
+ * @method static \Zarbinco\LaravelWorkdays\Data\DayInfo explain(string|\DateTimeInterface $date)
  * @method static bool isBusinessDay(string|\DateTimeInterface $date)
  * @method static bool isHoliday(string|\DateTimeInterface $date)
  * @method static bool isNonWorkingDay(string|\DateTimeInterface $date)

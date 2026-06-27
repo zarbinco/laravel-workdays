@@ -9,6 +9,7 @@ use Illuminate\Database\QueryException;
 use Illuminate\Support\Collection;
 use InvalidArgumentException;
 use RuntimeException;
+use Zarbinco\LaravelWorkdays\Data\Holiday;
 use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
 use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
@@ -48,14 +49,38 @@ final class DatabaseHolidayProvider implements HolidayProviderInterface
 
     public function hasCustomHoliday(string $profile, CarbonImmutable $date): bool
     {
-        return $this->specialDatesForProfileAndDate($profile, $date)
-            ->contains(static fn (WorkdaySpecialDate $specialDate): bool => $specialDate->type === self::TYPE_HOLIDAY);
+        return $this->customHoliday($profile, $date) !== null;
+    }
+
+    public function customHoliday(string $profile, CarbonImmutable $date): ?Holiday
+    {
+        return $this->specialDate($profile, $date, self::TYPE_HOLIDAY);
     }
 
     public function hasExtraWorkingDay(string $profile, CarbonImmutable $date): bool
     {
-        return $this->specialDatesForProfileAndDate($profile, $date)
-            ->contains(static fn (WorkdaySpecialDate $specialDate): bool => $specialDate->type === self::TYPE_WORKING_DAY);
+        return $this->extraWorkingDay($profile, $date) !== null;
+    }
+
+    public function extraWorkingDay(string $profile, CarbonImmutable $date): ?Holiday
+    {
+        return $this->specialDate($profile, $date, self::TYPE_WORKING_DAY);
+    }
+
+    private function specialDate(string $profile, CarbonImmutable $date, string $type): ?Holiday
+    {
+        $specialDate = $this->specialDatesForProfileAndDate($profile, $date)
+            ->first(static fn (WorkdaySpecialDate $specialDate): bool => $specialDate->type === $type);
+
+        if (! $specialDate instanceof WorkdaySpecialDate) {
+            return null;
+        }
+
+        return new Holiday(
+            date: $date,
+            name: is_string($specialDate->title) ? $specialDate->title : null,
+            source: 'database',
+        );
     }
 
     /**

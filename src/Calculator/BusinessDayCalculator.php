@@ -10,6 +10,8 @@ use InvalidArgumentException;
 use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Data\DayInfo;
+use Zarbinco\LaravelWorkdays\Data\DayReason;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
@@ -66,24 +68,12 @@ final class BusinessDayCalculator
 
     public function isBusinessDay(string|DateTimeInterface $date): bool
     {
-        $date = DateNormalizer::toImmutable($date);
-
-        if ($this->matchesExtraWorkingDay($date)) {
-            return true;
-        }
-
-        return ! $this->isNonWorkingDate($date);
+        return $this->isBusinessDate(DateNormalizer::toImmutable($date));
     }
 
     public function isHoliday(string|DateTimeInterface $date): bool
     {
-        $date = DateNormalizer::toImmutable($date);
-
-        if ($this->matchesExtraWorkingDay($date)) {
-            return false;
-        }
-
-        return $this->isNonWorkingDate($date);
+        return $this->isHolidayDate(DateNormalizer::toImmutable($date));
     }
 
     public function isNonWorkingDay(string|DateTimeInterface $date): bool
@@ -124,6 +114,86 @@ final class BusinessDayCalculator
     public function isExtraWorkingDay(string|DateTimeInterface $date): bool
     {
         return $this->matchesExtraWorkingDay(DateNormalizer::toImmutable($date));
+    }
+
+    public function explain(string|DateTimeInterface $date): DayInfo
+    {
+        $date = DateNormalizer::toImmutable($date);
+        $reasons = [];
+        $extraWorkingDay = $this->holidayProvider->extraWorkingDay($this->profile, $date);
+        $customHoliday = $this->holidayProvider->customHoliday($this->profile, $date);
+        $overridden = $extraWorkingDay !== null;
+        $overriddenBy = $overridden ? 'extra_working_day' : null;
+        $isWeekend = $this->matchesWeekend($date);
+        $gregorianHolidays = $this->recurringGregorianHolidays();
+        $gregorianKey = $date->format('m-d');
+        $isGregorianHoliday = array_key_exists($gregorianKey, $gregorianHolidays);
+        $jalaliHolidays = $this->recurringJalaliHolidays();
+        $jalaliKey = $jalaliHolidays === [] ? null : $this->jalaliCalendar->monthDayFromGregorian($date);
+        $isJalaliHoliday = $jalaliKey !== null && array_key_exists($jalaliKey, $jalaliHolidays);
+        $hijriHolidays = $this->recurringHijriHolidays();
+        $hijriKey = $hijriHolidays === [] ? null : $this->hijriCalendar->monthDayFromGregorian($date);
+        $isHijriHoliday = $hijriKey !== null && array_key_exists($hijriKey, $hijriHolidays);
+        $isCustomHoliday = $customHoliday !== null;
+        $isExtraWorkingDay = $extraWorkingDay !== null;
+        $isCalendarHoliday = $isGregorianHoliday || $isJalaliHoliday || $isHijriHoliday;
+
+        if ($isWeekend) {
+            $reasons[] = new DayReason(
+                type: 'weekend',
+                title: 'Weekend',
+                source: 'profile',
+                overridden: $overridden,
+                overriddenBy: $overriddenBy,
+            );
+        }
+
+        if ($isGregorianHoliday) {
+            $reasons[] = $this->recurringHolidayReason('gregorian_holiday', 'gregorian', $gregorianKey, $gregorianHolidays[$gregorianKey], $overridden, $overriddenBy);
+        }
+
+        if ($isJalaliHoliday) {
+            $reasons[] = $this->recurringHolidayReason('jalali_holiday', 'jalali', $jalaliKey, $jalaliHolidays[$jalaliKey], $overridden, $overriddenBy);
+        }
+
+        if ($isHijriHoliday) {
+            $reasons[] = $this->recurringHolidayReason('hijri_holiday', 'hijri', $hijriKey, $hijriHolidays[$hijriKey], $overridden, $overriddenBy);
+        }
+
+        if ($customHoliday !== null) {
+            $reasons[] = new DayReason(
+                type: 'custom_holiday',
+                title: $customHoliday->name,
+                source: $customHoliday->source,
+                key: $date->toDateString(),
+                overridden: $overridden,
+                overriddenBy: $overriddenBy,
+            );
+        }
+
+        if ($extraWorkingDay !== null) {
+            $reasons[] = new DayReason(
+                type: 'extra_working_day',
+                title: $extraWorkingDay->name,
+                source: $extraWorkingDay->source,
+                key: $date->toDateString(),
+            );
+        }
+
+        return new DayInfo(
+            date: $date,
+            profile: $this->profile,
+            isBusinessDay: $this->isBusinessDate($date),
+            isNonWorkingDay: $this->isHolidayDate($date),
+            isWeekend: $isWeekend,
+            isCalendarHoliday: $isCalendarHoliday,
+            isGregorianHoliday: $isGregorianHoliday,
+            isJalaliHoliday: $isJalaliHoliday,
+            isHijriHoliday: $isHijriHoliday,
+            isCustomHoliday: $isCustomHoliday,
+            isExtraWorkingDay: $isExtraWorkingDay,
+            reasons: $reasons,
+        );
     }
 
     public function addBusinessDays(string|DateTimeInterface $date, int $days): CarbonImmutable
@@ -200,6 +270,24 @@ final class BusinessDayCalculator
     private function matchesWeekend(CarbonImmutable $date): bool
     {
         return in_array($date->isoWeekday(), $this->weekendDays, true);
+    }
+
+    private function isBusinessDate(CarbonImmutable $date): bool
+    {
+        if ($this->matchesExtraWorkingDay($date)) {
+            return true;
+        }
+
+        return ! $this->isNonWorkingDate($date);
+    }
+
+    private function isHolidayDate(CarbonImmutable $date): bool
+    {
+        if ($this->matchesExtraWorkingDay($date)) {
+            return false;
+        }
+
+        return $this->isNonWorkingDate($date);
     }
 
     private function isNonWorkingDate(CarbonImmutable $date): bool
@@ -283,6 +371,25 @@ final class BusinessDayCalculator
     private function matchesExtraWorkingDay(CarbonImmutable $date): bool
     {
         return $this->holidayProvider->hasExtraWorkingDay($this->profile, $date);
+    }
+
+    private function recurringHolidayReason(
+        string $type,
+        string $calendar,
+        string $key,
+        mixed $title,
+        bool $overridden,
+        ?string $overriddenBy,
+    ): DayReason {
+        return new DayReason(
+            type: $type,
+            title: is_string($title) ? $title : null,
+            source: 'holiday_provider',
+            calendar: $calendar,
+            key: $key,
+            overridden: $overridden,
+            overriddenBy: $overriddenBy,
+        );
     }
 
     private function normalizeWeekend(mixed $weekday): int

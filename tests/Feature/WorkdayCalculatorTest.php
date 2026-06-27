@@ -8,6 +8,8 @@ use Carbon\CarbonImmutable;
 use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Data\DayInfo;
+use Zarbinco\LaravelWorkdays\Data\DayReason;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
 use Zarbinco\LaravelWorkdays\Support\WeekdayNormalizer;
@@ -69,6 +71,191 @@ final class WorkdayCalculatorTest extends TestCase
         $result = Workday::profile('global')->addBusinessDays('2026-06-26', 1);
 
         $this->assertSame('2026-06-29', $result->toDateString());
+    }
+
+    public function test_explain_returns_day_info_for_regular_business_day(): void
+    {
+        $info = Workday::profile('global')->explain('2026-06-29');
+
+        $this->assertInstanceOf(DayInfo::class, $info);
+        $this->assertSame('2026-06-29', $info->date->toDateString());
+        $this->assertSame('global', $info->profile);
+        $this->assertTrue($info->isBusinessDay);
+        $this->assertFalse($info->isNonWorkingDay);
+        $this->assertFalse($info->isWeekend);
+        $this->assertFalse($info->isCalendarHoliday);
+        $this->assertFalse($info->isCustomHoliday);
+        $this->assertFalse($info->isExtraWorkingDay);
+        $this->assertSame([], $info->reasons);
+    }
+
+    public function test_explain_returns_weekend_reason(): void
+    {
+        $info = Workday::profile('global')->explain('2026-06-27');
+        $reason = $this->reason($info, 'weekend');
+
+        $this->assertFalse($info->isBusinessDay);
+        $this->assertTrue($info->isNonWorkingDay);
+        $this->assertTrue($info->isWeekend);
+        $this->assertSame('Weekend', $reason->title);
+        $this->assertSame('profile', $reason->source);
+        $this->assertFalse($reason->overridden);
+    }
+
+    public function test_explain_returns_gregorian_holiday_reason_with_title(): void
+    {
+        $info = Workday::profile('global')->explain('2026-12-25');
+        $reason = $this->reason($info, 'gregorian_holiday');
+
+        $this->assertFalse($info->isBusinessDay);
+        $this->assertTrue($info->isCalendarHoliday);
+        $this->assertTrue($info->isGregorianHoliday);
+        $this->assertSame('Christmas', $reason->title);
+        $this->assertSame('gregorian', $reason->calendar);
+        $this->assertSame('12-25', $reason->key);
+    }
+
+    public function test_explain_returns_jalali_holiday_reason_with_title(): void
+    {
+        $this->setProfileConfig('iran', [
+            'holidays' => [
+                'jalali' => [
+                    '04-01' => 'Example Jalali Holiday',
+                ],
+            ],
+        ]);
+
+        $info = Workday::profile('iran')->explain('2026-06-22');
+        $reason = $this->reason($info, 'jalali_holiday');
+
+        $this->assertFalse($info->isBusinessDay);
+        $this->assertTrue($info->isCalendarHoliday);
+        $this->assertTrue($info->isJalaliHoliday);
+        $this->assertSame('Example Jalali Holiday', $reason->title);
+        $this->assertSame('jalali', $reason->calendar);
+        $this->assertSame('04-01', $reason->key);
+    }
+
+    public function test_explain_returns_hijri_holiday_reason_with_title(): void
+    {
+        $date = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 8, 15)->toDateString();
+
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => [
+                    '08-15' => 'Example Hijri Holiday',
+                ],
+            ],
+        ]);
+
+        $info = Workday::profile('global')->explain($date);
+        $reason = $this->reason($info, 'hijri_holiday');
+
+        $this->assertFalse($info->isBusinessDay);
+        $this->assertTrue($info->isCalendarHoliday);
+        $this->assertTrue($info->isHijriHoliday);
+        $this->assertSame('Example Hijri Holiday', $reason->title);
+        $this->assertSame('hijri', $reason->calendar);
+        $this->assertSame('08-15', $reason->key);
+    }
+
+    public function test_explain_returns_custom_holiday_reason_with_title(): void
+    {
+        $this->setProfileConfig('global', [
+            'custom_holidays' => [
+                '2026-06-29' => 'Company holiday',
+            ],
+        ]);
+
+        $info = Workday::profile('global')->explain('2026-06-29');
+        $reason = $this->reason($info, 'custom_holiday');
+
+        $this->assertFalse($info->isBusinessDay);
+        $this->assertTrue($info->isNonWorkingDay);
+        $this->assertTrue($info->isCustomHoliday);
+        $this->assertSame('Company holiday', $reason->title);
+        $this->assertSame('config', $reason->source);
+        $this->assertSame('2026-06-29', $reason->key);
+    }
+
+    public function test_explain_marks_weekend_as_overridden_by_extra_working_day(): void
+    {
+        $this->setProfileConfig('global', [
+            'extra_working_days' => [
+                '2026-06-27' => 'Compensation working day',
+            ],
+        ]);
+
+        $info = Workday::profile('global')->explain('2026-06-27');
+        $weekendReason = $this->reason($info, 'weekend');
+        $extraWorkingDayReason = $this->reason($info, 'extra_working_day');
+
+        $this->assertTrue($info->isBusinessDay);
+        $this->assertFalse($info->isNonWorkingDay);
+        $this->assertTrue($info->isWeekend);
+        $this->assertTrue($info->isExtraWorkingDay);
+        $this->assertTrue($weekendReason->overridden);
+        $this->assertSame('extra_working_day', $weekendReason->overriddenBy);
+        $this->assertSame('Compensation working day', $extraWorkingDayReason->title);
+        $this->assertFalse($extraWorkingDayReason->overridden);
+    }
+
+    public function test_explain_marks_holiday_as_overridden_by_extra_working_day(): void
+    {
+        $this->setProfileConfig('global', [
+            'extra_working_days' => [
+                '2026-12-25' => 'Compensation working day',
+            ],
+        ]);
+
+        $info = Workday::profile('global')->explain('2026-12-25');
+        $holidayReason = $this->reason($info, 'gregorian_holiday');
+
+        $this->assertTrue($info->isBusinessDay);
+        $this->assertFalse($info->isNonWorkingDay);
+        $this->assertTrue($info->isCalendarHoliday);
+        $this->assertTrue($info->isExtraWorkingDay);
+        $this->assertTrue($holidayReason->overridden);
+        $this->assertSame('extra_working_day', $holidayReason->overriddenBy);
+    }
+
+    public function test_facade_explain_uses_default_profile(): void
+    {
+        $info = Workday::explain('2026-06-25');
+
+        $this->assertSame('iran', $info->profile);
+        $this->assertFalse($info->isBusinessDay);
+        $this->assertTrue($info->isWeekend);
+    }
+
+    public function test_day_info_to_array_shape(): void
+    {
+        $info = Workday::profile('iran')->explain('2026-06-25');
+
+        $this->assertSame([
+            'date' => '2026-06-25',
+            'profile' => 'iran',
+            'is_business_day' => false,
+            'is_non_working_day' => true,
+            'is_weekend' => true,
+            'is_calendar_holiday' => false,
+            'is_gregorian_holiday' => false,
+            'is_jalali_holiday' => false,
+            'is_hijri_holiday' => false,
+            'is_custom_holiday' => false,
+            'is_extra_working_day' => false,
+            'reasons' => [
+                [
+                    'type' => 'weekend',
+                    'title' => 'Weekend',
+                    'source' => 'profile',
+                    'calendar' => null,
+                    'key' => null,
+                    'overridden' => false,
+                    'overridden_by' => null,
+                ],
+            ],
+        ], $info->toArray());
     }
 
     public function test_custom_holiday_exact_gregorian_date_is_skipped(): void
@@ -808,5 +995,16 @@ final class WorkdayCalculatorTest extends TestCase
         }
 
         $this->fail('Unable to find a non-weekend Hijri preset holiday for the test range.');
+    }
+
+    private function reason(DayInfo $info, string $type): DayReason
+    {
+        foreach ($info->reasons as $reason) {
+            if ($reason->type === $type) {
+                return $reason;
+            }
+        }
+
+        $this->fail(sprintf('Day reason [%s] was not found.', $type));
     }
 }

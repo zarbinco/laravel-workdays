@@ -84,6 +84,52 @@ Workday::addBusinessDays('2026-06-24', 2);
 
 Date-returning methods return `Carbon\CarbonImmutable`.
 
+## Explaining A Date
+
+Use `explain()` when you need to know why a date is treated as a business day or non-working day:
+
+```php
+$info = Workday::profile('iran')->explain('2026-06-25');
+
+$info->isBusinessDay;
+$info->isWeekend;
+$info->reasons;
+$info->toArray();
+```
+
+The method returns a `Zarbinco\LaravelWorkdays\Data\DayInfo` value object. Reasons are `Zarbinco\LaravelWorkdays\Data\DayReason` objects for matches such as weekends, recurring Gregorian/Jalali/Hijri holidays, exact custom holidays, and exact extra working days.
+
+Example array output:
+
+```php
+[
+    'date' => '2026-06-25',
+    'profile' => 'iran',
+    'is_business_day' => false,
+    'is_non_working_day' => true,
+    'is_weekend' => true,
+    'is_calendar_holiday' => false,
+    'is_gregorian_holiday' => false,
+    'is_jalali_holiday' => false,
+    'is_hijri_holiday' => false,
+    'is_custom_holiday' => false,
+    'is_extra_working_day' => false,
+    'reasons' => [
+        [
+            'type' => 'weekend',
+            'title' => 'Weekend',
+            'source' => 'profile',
+            'calendar' => null,
+            'key' => null,
+            'overridden' => false,
+            'overridden_by' => null,
+        ],
+    ],
+];
+```
+
+`explain()` does not change calculation behavior. Extra working days still win over weekends and holidays; when that happens, other matching reasons can appear with `overridden` set to `true` and `overridden_by` set to `extra_working_day`.
+
 ## Profiles
 
 Profiles live in `config/workdays.php`:
