@@ -11,25 +11,25 @@ final class WorkdaysServiceProvider extends ServiceProvider
 {
     public function register(): void
     {
-        $this->mergeConfigFrom(__DIR__ . '/../config/workdays.php', 'workdays');
+        $this->mergeConfigFrom(__DIR__.'/../config/workdays.php', 'workdays');
 
-        $this->app->singleton(WorkdayManager::class, fn (): WorkdayManager => new WorkdayManager());
+        $this->app->singleton(WorkdayManager::class, fn (): WorkdayManager => new WorkdayManager);
         $this->app->alias(WorkdayManager::class, 'workdays');
     }
 
     public function boot(): void
     {
         $this->publishes([
-            __DIR__ . '/../config/workdays.php' => config_path('workdays.php'),
+            __DIR__.'/../config/workdays.php' => config_path('workdays.php'),
         ], 'workdays-config');
 
         $this->publishes([
-            __DIR__ . '/../config/workdays-iran.php' => config_path('workdays.php'),
+            __DIR__.'/../config/workdays-iran.php' => config_path('workdays.php'),
         ], 'workdays-config-iran');
 
         $this->publishes([
-            __DIR__ . '/../database/migrations/2026_01_01_000001_create_workday_holiday_rules_table.php' => database_path('migrations/2026_01_01_000001_create_workday_holiday_rules_table.php'),
-            __DIR__ . '/../database/migrations/2026_01_01_000002_create_workday_special_dates_table.php' => database_path('migrations/2026_01_01_000002_create_workday_special_dates_table.php'),
+            __DIR__.'/../database/migrations/2026_01_01_000001_create_workday_holiday_rules_table.php' => database_path('migrations/2026_01_01_000001_create_workday_holiday_rules_table.php'),
+            __DIR__.'/../database/migrations/2026_01_01_000002_create_workday_special_dates_table.php' => database_path('migrations/2026_01_01_000002_create_workday_special_dates_table.php'),
         ], 'workdays-migrations');
 
         if ($this->app->runningInConsole()) {

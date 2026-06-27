@@ -7,16 +7,16 @@ namespace Zarbinco\LaravelWorkdays\Holidays;
 use Carbon\CarbonImmutable;
 use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
+use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
 
 final readonly class ConfigHolidayProvider implements HolidayProviderInterface
 {
     /**
-     * @param array<string, array<string, mixed>> $profiles
+     * @param  array<string, array<string, mixed>>  $profiles
      */
     public function __construct(
         private array $profiles,
-    ) {
-    }
+    ) {}
 
     public function recurringHolidays(string $profile, string $calendar): array
     {
@@ -30,7 +30,7 @@ final readonly class ConfigHolidayProvider implements HolidayProviderInterface
         $recurringHolidays = $holidays[$calendar] ?? [];
 
         if (! is_array($recurringHolidays)) {
-            throw new InvalidArgumentException(sprintf('The %s holidays config for profile [%s] must be an array.', $calendar, $profile));
+            throw new InvalidArgumentException(sprintf('The holidays.%s config for profile [%s] must be an array.', $calendar, $profile));
         }
 
         foreach (array_keys($recurringHolidays) as $key) {
@@ -79,6 +79,6 @@ final readonly class ConfigHolidayProvider implements HolidayProviderInterface
             throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $profile));
         }
 
-        return $this->profiles[$profile];
+        return ProfileConfigValidator::validate($profile, $this->profiles[$profile]);
     }
 }

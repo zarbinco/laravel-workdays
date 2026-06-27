@@ -7,11 +7,13 @@ namespace Zarbinco\LaravelWorkdays\Calculator;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 use InvalidArgumentException;
+use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
+use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
 use Zarbinco\LaravelWorkdays\Support\WeekdayNormalizer;
 
 final class BusinessDayCalculator
@@ -28,18 +30,22 @@ final class BusinessDayCalculator
     private readonly HolidayProviderInterface $holidayProvider;
 
     /**
-     * @param array<string, mixed> $profileConfig
+     * @param  array<string, mixed>  $profileConfig
      */
     public function __construct(
         private readonly string $profile,
         private readonly array $profileConfig,
         private readonly bool $includeStartDate = false,
+        private readonly int $maxScanDays = 3660,
         ?JalaliCalendarAdapter $jalaliCalendar = null,
         ?HijriCalendarAdapter $hijriCalendar = null,
         ?HolidayProviderInterface $holidayProvider = null,
     ) {
-        $this->jalaliCalendar = $jalaliCalendar ?? new JalaliCalendarAdapter();
-        $this->hijriCalendar = $hijriCalendar ?? new HijriCalendarAdapter();
+        ProfileConfigValidator::validate($profile, $profileConfig);
+        ProfileConfigValidator::validateMaxScanDays($maxScanDays);
+
+        $this->jalaliCalendar = $jalaliCalendar ?? new JalaliCalendarAdapter;
+        $this->hijriCalendar = $hijriCalendar ?? new HijriCalendarAdapter;
         $this->holidayProvider = $holidayProvider ?? new ConfigHolidayProvider([$profile => $profileConfig]);
 
         $weekends = $profileConfig['weekends'] ?? [];
@@ -132,24 +138,32 @@ final class BusinessDayCalculator
 
     public function nextBusinessDay(string|DateTimeInterface $date): CarbonImmutable
     {
-        $date = DateNormalizer::toImmutable($date)->addDay();
+        $date = DateNormalizer::toImmutable($date);
 
-        while (! $this->isBusinessDay($date)) {
+        for ($scannedDays = 0; $scannedDays < $this->maxScanDays; $scannedDays++) {
             $date = $date->addDay();
+
+            if ($this->isBusinessDay($date)) {
+                return $date;
+            }
         }
 
-        return $date;
+        $this->throwUnableToResolveBusinessDay();
     }
 
     public function previousBusinessDay(string|DateTimeInterface $date): CarbonImmutable
     {
-        $date = DateNormalizer::toImmutable($date)->subDay();
+        $date = DateNormalizer::toImmutable($date);
 
-        while (! $this->isBusinessDay($date)) {
+        for ($scannedDays = 0; $scannedDays < $this->maxScanDays; $scannedDays++) {
             $date = $date->subDay();
+
+            if ($this->isBusinessDay($date)) {
+                return $date;
+            }
         }
 
-        return $date;
+        $this->throwUnableToResolveBusinessDay();
     }
 
     public function diffBusinessDays(string|DateTimeInterface $startDate, string|DateTimeInterface $endDate): int
@@ -304,6 +318,7 @@ final class BusinessDayCalculator
         }
 
         $countedDays = 0;
+        $scannedDays = 0;
 
         if ($this->includeStartDate) {
             if ($this->isBusinessDay($date)) {
@@ -318,7 +333,12 @@ final class BusinessDayCalculator
         }
 
         while ($countedDays < $days) {
+            if ($scannedDays >= $this->maxScanDays) {
+                $this->throwUnableToResolveBusinessDay();
+            }
+
             $date = $direction === 1 ? $date->addDay() : $date->subDay();
+            $scannedDays++;
 
             if ($this->isBusinessDay($date)) {
                 $countedDays++;
@@ -330,6 +350,15 @@ final class BusinessDayCalculator
         }
 
         return ['date' => $date, 'skippedDates' => $skippedDates];
+    }
+
+    private function throwUnableToResolveBusinessDay(): never
+    {
+        throw new RuntimeException(sprintf(
+            'Unable to resolve a business day within [%d] calendar days for profile [%s]. Check weekends, holidays, extra working days, and max_scan_days config.',
+            $this->maxScanDays,
+            $this->profile,
+        ));
     }
 
     private function countBusinessDaysForward(CarbonImmutable $startDate, CarbonImmutable $endDate): int

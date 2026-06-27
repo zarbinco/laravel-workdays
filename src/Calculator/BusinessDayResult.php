@@ -9,7 +9,7 @@ use Carbon\CarbonImmutable;
 final readonly class BusinessDayResult
 {
     /**
-     * @param array<int, CarbonImmutable> $skippedDates
+     * @param  array<int, CarbonImmutable>  $skippedDates
      */
     public function __construct(
         public CarbonImmutable $startDate,
@@ -18,8 +18,7 @@ final readonly class BusinessDayResult
         public int $calendarDays,
         public array $skippedDates,
         public string $profile,
-    ) {
-    }
+    ) {}
 
     /**
      * @return array{

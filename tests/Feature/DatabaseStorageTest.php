@@ -18,7 +18,7 @@ final class DatabaseStorageTest extends TestCase
     {
         parent::setUp();
 
-        $this->loadMigrationsFrom(dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'database' . DIRECTORY_SEPARATOR . 'migrations');
+        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
     }
 
     public function test_migrations_create_workday_holiday_rules_table(): void
@@ -112,7 +112,7 @@ final class DatabaseStorageTest extends TestCase
     public function test_database_storage_detects_hijri_recurring_holiday_from_database(): void
     {
         $this->setStorageDriver('database');
-        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15);
+        $date = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 8, 15);
         $this->createRule('global', 'hijri', 8, 15);
 
         $calculator = Workday::profile('global');
@@ -245,7 +245,7 @@ final class DatabaseStorageTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $overrides
+     * @param  array<string, mixed>  $overrides
      */
     private function setProfileConfig(string $profile, array $overrides): void
     {

@@ -7,13 +7,14 @@ namespace Zarbinco\LaravelWorkdays;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 use InvalidArgumentException;
-use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
+use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
+use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
 use Zarbinco\LaravelWorkdays\Support\StorageDriver;
 
 final class WorkdayManager
@@ -26,10 +27,13 @@ final class WorkdayManager
             throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $profile));
         }
 
+        $profileConfig = ProfileConfigValidator::validate($profile, $profiles[$profile]);
+
         return new BusinessDayCalculator(
             profile: $profile,
-            profileConfig: $profiles[$profile],
+            profileConfig: $profileConfig,
             includeStartDate: $this->includeStartDate(),
+            maxScanDays: $this->maxScanDays(),
             hijriCalendar: HijriCalendarAdapter::fromConfig(),
             holidayProvider: $this->holidayProvider($profiles),
         );
@@ -142,11 +146,16 @@ final class WorkdayManager
 
     private function includeStartDate(): bool
     {
-        return (bool) config('workdays.include_start_date', false);
+        return ProfileConfigValidator::validateIncludeStartDate(config('workdays.include_start_date', false));
+    }
+
+    private function maxScanDays(): int
+    {
+        return ProfileConfigValidator::validateMaxScanDays(config('workdays.max_scan_days', 3660));
     }
 
     /**
-     * @param array<string, array<string, mixed>> $profiles
+     * @param  array<string, array<string, mixed>>  $profiles
      */
     private function holidayProvider(array $profiles): HolidayProviderInterface
     {
@@ -160,8 +169,8 @@ final class WorkdayManager
 
         return match ($driver) {
             StorageDriver::CONFIG => $configProvider,
-            StorageDriver::DATABASE => new DatabaseHolidayProvider(),
-            StorageDriver::CHAIN => new ChainHolidayProvider($configProvider, new DatabaseHolidayProvider()),
+            StorageDriver::DATABASE => new DatabaseHolidayProvider,
+            StorageDriver::CHAIN => new ChainHolidayProvider($configProvider, new DatabaseHolidayProvider),
             default => throw new InvalidArgumentException(StorageDriver::unsupportedMessage($driver)),
         };
     }

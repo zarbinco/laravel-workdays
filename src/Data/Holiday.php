@@ -12,6 +12,5 @@ final readonly class Holiday
         public CarbonImmutable $date,
         public string $name,
         public string $source = 'custom',
-    ) {
-    }
+    ) {}
 }

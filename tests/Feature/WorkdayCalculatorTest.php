@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 
+use Carbon\CarbonImmutable;
 use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
@@ -121,7 +122,7 @@ final class WorkdayCalculatorTest extends TestCase
 
     public function test_jalali_calendar_adapter_converts_between_gregorian_and_jalali(): void
     {
-        $adapter = new JalaliCalendarAdapter();
+        $adapter = new JalaliCalendarAdapter;
 
         $this->assertSame('04-01', $adapter->monthDayFromGregorian(DateNormalizer::toImmutable('2026-06-22')));
         $this->assertSame('2026-06-22', $adapter->jalaliDateToGregorian(1405, 4, 1)->toDateString());
@@ -129,7 +130,7 @@ final class WorkdayCalculatorTest extends TestCase
 
     public function test_hijri_calendar_adapter_converts_between_gregorian_and_hijri(): void
     {
-        $adapter = new HijriCalendarAdapter();
+        $adapter = new HijriCalendarAdapter;
 
         $this->assertSame('08-15', $adapter->monthDayFromGregorian(DateNormalizer::toImmutable('2025-02-14')));
         $this->assertSame('2025-02-14', $adapter->hijriDateToGregorian(1446, 8, 15)->toDateString());
@@ -194,7 +195,7 @@ final class WorkdayCalculatorTest extends TestCase
 
     public function test_hijri_recurring_holiday_is_detected(): void
     {
-        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15)->toDateString();
+        $date = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 8, 15)->toDateString();
 
         $this->setProfileConfig('global', [
             'holidays' => [
@@ -214,7 +215,7 @@ final class WorkdayCalculatorTest extends TestCase
 
     public function test_hijri_recurring_holiday_is_skipped_by_add_business_days(): void
     {
-        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15);
+        $date = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 8, 15);
 
         $this->setProfileConfig('global', [
             'holidays' => [
@@ -233,7 +234,7 @@ final class WorkdayCalculatorTest extends TestCase
     {
         config()->set('workdays', $this->iranPresetConfig());
 
-        $date = (new JalaliCalendarAdapter())->jalaliDateToGregorian(1405, 1, 1);
+        $date = (new JalaliCalendarAdapter)->jalaliDateToGregorian(1405, 1, 1);
         $calculator = Workday::profile('iran');
 
         $this->assertTrue($calculator->isJalaliHoliday($date));
@@ -245,7 +246,7 @@ final class WorkdayCalculatorTest extends TestCase
     {
         config()->set('workdays', $this->iranPresetConfig());
 
-        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 10, 1);
+        $date = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 10, 1);
         $calculator = Workday::profile('iran');
 
         $this->assertTrue($calculator->isHijriHoliday($date));
@@ -257,8 +258,8 @@ final class WorkdayCalculatorTest extends TestCase
     {
         config()->set('workdays', $this->iranPresetConfig());
 
-        $start = (new JalaliCalendarAdapter())->jalaliDateToGregorian(1405, 1, 1)->subDay();
-        $expected = (new JalaliCalendarAdapter())->jalaliDateToGregorian(1405, 1, 5);
+        $start = (new JalaliCalendarAdapter)->jalaliDateToGregorian(1405, 1, 1)->subDay();
+        $expected = (new JalaliCalendarAdapter)->jalaliDateToGregorian(1405, 1, 5);
 
         $result = Workday::profile('iran')->addBusinessDays($start, 1);
 
@@ -331,7 +332,7 @@ final class WorkdayCalculatorTest extends TestCase
 
     public function test_gregorian_and_jalali_predicates_remain_unchanged_with_hijri_support(): void
     {
-        $hijriDate = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15)->toDateString();
+        $hijriDate = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 8, 15)->toDateString();
 
         $this->setProfileConfig('global', [
             'holidays' => [
@@ -354,7 +355,7 @@ final class WorkdayCalculatorTest extends TestCase
 
     public function test_is_calendar_holiday_returns_true_for_gregorian_jalali_or_hijri_recurring_holidays(): void
     {
-        $hijriDate = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15)->toDateString();
+        $hijriDate = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 8, 15)->toDateString();
 
         $this->setProfileConfig('global', [
             'holidays' => [
@@ -482,7 +483,7 @@ final class WorkdayCalculatorTest extends TestCase
 
     public function test_extra_working_day_overrides_hijri_holiday(): void
     {
-        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15)->toDateString();
+        $date = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 8, 15)->toDateString();
 
         $this->setProfileConfig('global', [
             'holidays' => [
@@ -766,7 +767,7 @@ final class WorkdayCalculatorTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $overrides
+     * @param  array<string, mixed>  $overrides
      */
     private function setProfileConfig(string $profile, array $overrides): void
     {
@@ -781,12 +782,12 @@ final class WorkdayCalculatorTest extends TestCase
      */
     private function iranPresetConfig(): array
     {
-        return require dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'workdays-iran.php';
+        return require dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays-iran.php';
     }
 
-    private function nonWeekendIranPresetHijriHoliday(): \Carbon\CarbonImmutable
+    private function nonWeekendIranPresetHijriHoliday(): CarbonImmutable
     {
-        $adapter = new HijriCalendarAdapter();
+        $adapter = new HijriCalendarAdapter;
         $holidays = [
             [1, 9],
             [1, 10],

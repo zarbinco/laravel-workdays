@@ -16,7 +16,9 @@ use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
 final class DatabaseHolidayProvider implements HolidayProviderInterface
 {
     private const TYPE_HOLIDAY = 'holiday';
+
     private const TYPE_WORKING_DAY = 'working_day';
+
     private const MISSING_TABLES_MESSAGE = 'Workdays database storage is enabled, but the workday tables are not available. Publish and run the workdays migrations.';
 
     /**
@@ -83,7 +85,7 @@ final class DatabaseHolidayProvider implements HolidayProviderInterface
      */
     private function specialDatesForProfileAndDate(string $profile, CarbonImmutable $date): Collection
     {
-        $key = $profile . '|' . $date->toDateString();
+        $key = $profile.'|'.$date->toDateString();
 
         if (! array_key_exists($key, $this->specialDatesByProfileAndDate)) {
             try {

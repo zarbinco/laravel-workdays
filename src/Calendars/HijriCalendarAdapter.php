@@ -17,8 +17,11 @@ use Throwable;
 final readonly class HijriCalendarAdapter
 {
     public const METHOD_MATHEMATICAL = 'mathematical';
+
     public const METHOD_UMM_AL_QURA = 'umm_al_qura';
+
     public const METHOD_HIGH_JUDICIARY = 'high_judiciary';
+
     public const METHOD_DIYANET = 'diyanet';
 
     /**
@@ -112,10 +115,10 @@ final readonly class HijriCalendarAdapter
     private function calculator(): MathematicalCalculator|UmmAlQura|HighJudiciaryCouncilOfSaudiArabia|Diyanet
     {
         return match ($this->method) {
-            self::METHOD_MATHEMATICAL => new MathematicalCalculator(),
-            self::METHOD_UMM_AL_QURA => new UmmAlQura(),
-            self::METHOD_HIGH_JUDICIARY => new HighJudiciaryCouncilOfSaudiArabia(),
-            self::METHOD_DIYANET => new Diyanet(),
+            self::METHOD_MATHEMATICAL => new MathematicalCalculator,
+            self::METHOD_UMM_AL_QURA => new UmmAlQura,
+            self::METHOD_HIGH_JUDICIARY => new HighJudiciaryCouncilOfSaudiArabia,
+            self::METHOD_DIYANET => new Diyanet,
         };
     }
 

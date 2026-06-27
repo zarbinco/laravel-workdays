@@ -7,7 +7,9 @@ namespace Zarbinco\LaravelWorkdays\Support;
 final class StorageDriver
 {
     public const CONFIG = 'config';
+
     public const DATABASE = 'database';
+
     public const CHAIN = 'chain';
 
     /**

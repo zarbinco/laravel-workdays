@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Zarbinco\LaravelWorkdays\Facades;
 
 use Illuminate\Support\Facades\Facade;
+use Zarbinco\LaravelWorkdays\WorkdayManager;
 
 /**
  * @method static \Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator profile(string $profile)
@@ -25,7 +26,7 @@ use Illuminate\Support\Facades\Facade;
  * @method static int diffBusinessDays(string|\DateTimeInterface $startDate, string|\DateTimeInterface $endDate)
  * @method static \Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult calculate(string|\DateTimeInterface $date, int $businessDays)
  *
- * @see \Zarbinco\LaravelWorkdays\WorkdayManager
+ * @see WorkdayManager
  */
 final class Workday extends Facade
 {

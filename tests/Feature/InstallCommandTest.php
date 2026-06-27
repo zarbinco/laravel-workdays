@@ -178,7 +178,7 @@ final class InstallCommandTest extends TestCase
     }
 
     /**
-     * @param array<string, mixed> $arguments
+     * @param  array<string, mixed>  $arguments
      * @return array<string, mixed>
      */
     private function runInstallAndReturnPublishedConfig(array $arguments): array
@@ -194,7 +194,7 @@ final class InstallCommandTest extends TestCase
 
     private function fakePublishDestination(): void
     {
-        $this->temporaryDirectory ??= sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'laravel-workdays-' . bin2hex(random_bytes(8));
+        $this->temporaryDirectory ??= sys_get_temp_dir().DIRECTORY_SEPARATOR.'laravel-workdays-'.bin2hex(random_bytes(8));
         File::ensureDirectoryExists($this->temporaryDirectory);
 
         if (method_exists($this->app, 'useConfigPath')) {
@@ -202,8 +202,8 @@ final class InstallCommandTest extends TestCase
         }
 
         $this->publishPath = config_path('workdays.php');
-        $this->firstMigrationPath = $this->temporaryDirectory . DIRECTORY_SEPARATOR . 'migrations' . DIRECTORY_SEPARATOR . '2026_01_01_000001_create_workday_holiday_rules_table.php';
-        $this->secondMigrationPath = $this->temporaryDirectory . DIRECTORY_SEPARATOR . 'migrations' . DIRECTORY_SEPARATOR . '2026_01_01_000002_create_workday_special_dates_table.php';
+        $this->firstMigrationPath = $this->temporaryDirectory.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.'2026_01_01_000001_create_workday_holiday_rules_table.php';
+        $this->secondMigrationPath = $this->temporaryDirectory.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.'2026_01_01_000002_create_workday_special_dates_table.php';
 
         File::delete($this->publishPath);
         File::delete($this->firstMigrationPath);
@@ -220,10 +220,10 @@ final class InstallCommandTest extends TestCase
         $this->originalPublishes ??= $publishes;
         $this->originalPublishGroups ??= $publishGroups;
 
-        $defaultConfig = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'workdays.php';
-        $iranConfig = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'workdays-iran.php';
-        $firstMigration = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'database' . DIRECTORY_SEPARATOR . 'migrations' . DIRECTORY_SEPARATOR . '2026_01_01_000001_create_workday_holiday_rules_table.php';
-        $secondMigration = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'database' . DIRECTORY_SEPARATOR . 'migrations' . DIRECTORY_SEPARATOR . '2026_01_01_000002_create_workday_special_dates_table.php';
+        $defaultConfig = dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays.php';
+        $iranConfig = dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays-iran.php';
+        $firstMigration = dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.'2026_01_01_000001_create_workday_holiday_rules_table.php';
+        $secondMigration = dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.'2026_01_01_000002_create_workday_special_dates_table.php';
 
         $publishes[WorkdaysServiceProvider::class] = [
             $defaultConfig => $destination,
@@ -272,7 +272,7 @@ final class InstallCommandTest extends TestCase
     }
 
     /**
-     * @param array<mixed> $value
+     * @param  array<mixed>  $value
      */
     private function setStaticServiceProviderProperty(string $name, array $value): void
     {

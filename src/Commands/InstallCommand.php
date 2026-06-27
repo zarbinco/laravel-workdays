@@ -120,7 +120,7 @@ final class InstallCommand extends Command
         $pattern = "/('storage'\\s*=>\\s*\\[\\s*\\R\\s*'driver'\\s*=>\\s*)'config'(\\s*,)/m";
         $patched = preg_replace_callback(
             $pattern,
-            static fn (array $matches): string => $matches[1] . "'" . $storage . "'" . $matches[2],
+            static fn (array $matches): string => $matches[1]."'".$storage."'".$matches[2],
             $contents,
             1,
             $count,

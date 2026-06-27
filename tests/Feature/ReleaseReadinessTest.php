@@ -1,0 +1,252 @@
+<?php
+
+declare(strict_types=1);
+
+namespace Zarbinco\LaravelWorkdays\Tests\Feature;
+
+use InvalidArgumentException;
+use RuntimeException;
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+use Zarbinco\LaravelWorkdays\Tests\TestCase;
+
+final class ReleaseReadinessTest extends TestCase
+{
+    public function test_max_scan_days_exists_in_default_config(): void
+    {
+        $this->assertSame(3660, config('workdays.max_scan_days'));
+    }
+
+    public function test_max_scan_days_exists_in_iran_config(): void
+    {
+        $config = require dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays-iran.php';
+
+        $this->assertSame(3660, $config['max_scan_days']);
+    }
+
+    public function test_max_scan_days_must_be_positive_integer(): void
+    {
+        config()->set('workdays.max_scan_days', 0);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The workdays max_scan_days config value must be a positive integer.');
+
+        Workday::profile('global');
+    }
+
+    public function test_next_business_day_throws_when_no_business_day_found_within_max_scan_days(): void
+    {
+        $this->configureImpossibleBusinessDayProfile();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage($this->maxScanMessage());
+
+        Workday::profile('global')->nextBusinessDay('2026-06-26');
+    }
+
+    public function test_previous_business_day_throws_when_no_business_day_found_within_max_scan_days(): void
+    {
+        $this->configureImpossibleBusinessDayProfile();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage($this->maxScanMessage());
+
+        Workday::profile('global')->previousBusinessDay('2026-06-26');
+    }
+
+    public function test_add_business_days_throws_when_no_business_day_found_within_max_scan_days(): void
+    {
+        $this->configureImpossibleBusinessDayProfile();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage($this->maxScanMessage());
+
+        Workday::profile('global')->addBusinessDays('2026-06-26', 1);
+    }
+
+    public function test_calculate_throws_when_no_business_day_found_within_max_scan_days(): void
+    {
+        $this->configureImpossibleBusinessDayProfile();
+
+        $this->expectException(RuntimeException::class);
+        $this->expectExceptionMessage($this->maxScanMessage());
+
+        Workday::profile('global')->calculate('2026-06-26', 1);
+    }
+
+    public function test_invalid_custom_holiday_date_key_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'custom_holidays' => [
+                '2026-02-31' => 'Invalid holiday',
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid custom_holidays date key [2026-02-31]');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_custom_holiday_date_format_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'custom_holidays' => [
+                '2026/01/01' => 'Invalid holiday',
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid custom_holidays date key [2026/01/01]');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_extra_working_day_date_key_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'extra_working_days' => [
+                '2026-13-01' => 'Invalid working day',
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid extra_working_days date key [2026-13-01]');
+
+        Workday::profile('global');
+    }
+
+    public function test_profile_config_must_be_array(): void
+    {
+        config()->set('workdays.profiles.global', 'invalid');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The workdays profile [global] config must be an array.');
+
+        Workday::profile('global');
+    }
+
+    public function test_holidays_config_must_be_array(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => 'invalid',
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The holidays config for profile [global] must be an array.');
+
+        Workday::profile('global');
+    }
+
+    public function test_gregorian_holidays_config_must_be_array(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'gregorian' => 'invalid',
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The holidays.gregorian config for profile [global] must be an array.');
+
+        Workday::profile('global');
+    }
+
+    public function test_jalali_holidays_config_must_be_array(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'jalali' => 'invalid',
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The holidays.jalali config for profile [global] must be an array.');
+
+        Workday::profile('global');
+    }
+
+    public function test_hijri_holidays_config_must_be_array(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => 'invalid',
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The holidays.hijri config for profile [global] must be an array.');
+
+        Workday::profile('global');
+    }
+
+    public function test_license_file_exists(): void
+    {
+        $this->assertFileExists(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'LICENSE');
+    }
+
+    public function test_github_actions_workflow_exists(): void
+    {
+        $this->assertFileExists(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'.github'.DIRECTORY_SEPARATOR.'workflows'.DIRECTORY_SEPARATOR.'tests.yml');
+    }
+
+    public function test_readme_includes_database_storage_documentation(): void
+    {
+        $readme = $this->readme();
+
+        $this->assertStringContainsString('Database Storage', $readme);
+        $this->assertStringContainsString('workday_holiday_rules', $readme);
+        $this->assertStringContainsString('workday_special_dates', $readme);
+    }
+
+    public function test_readme_includes_iran_preset_warning(): void
+    {
+        $readme = $this->readme();
+
+        $this->assertStringContainsString('not an exact official calendar generator', $readme);
+        $this->assertStringContainsString('Hijri dates may differ', $readme);
+    }
+
+    public function test_readme_includes_max_scan_days_troubleshooting(): void
+    {
+        $readme = $this->readme();
+
+        $this->assertStringContainsString('No business day found within max_scan_days', $readme);
+        $this->assertStringContainsString('max_scan_days', $readme);
+    }
+
+    private function configureImpossibleBusinessDayProfile(): void
+    {
+        config()->set('workdays.max_scan_days', 3);
+        $this->setProfileConfig('global', [
+            'weekends' => [1, 2, 3, 4, 5, 6, 7],
+            'holidays' => [
+                'gregorian' => [],
+                'jalali' => [],
+                'hijri' => [],
+            ],
+            'custom_holidays' => [],
+            'extra_working_days' => [],
+        ]);
+    }
+
+    /**
+     * @param  array<string, mixed>  $overrides
+     */
+    private function setProfileConfig(string $profile, array $overrides): void
+    {
+        $config = config('workdays');
+        $config['profiles'][$profile] = array_replace_recursive($config['profiles'][$profile], $overrides);
+
+        config()->set('workdays', $config);
+    }
+
+    private function maxScanMessage(): string
+    {
+        return 'Unable to resolve a business day within [3] calendar days for profile [global]. Check weekends, holidays, extra working days, and max_scan_days config.';
+    }
+
+    private function readme(): string
+    {
+        return file_get_contents(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'README.md') ?: '';
+    }
+}

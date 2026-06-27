@@ -7,6 +7,8 @@ return [
 
     'include_start_date' => false,
 
+    'max_scan_days' => 3660,
+
     'storage' => [
         'driver' => 'config',
     ],

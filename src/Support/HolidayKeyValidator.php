@@ -9,7 +9,9 @@ use InvalidArgumentException;
 final class HolidayKeyValidator
 {
     private const CALENDAR_GREGORIAN = 'gregorian';
+
     private const CALENDAR_JALALI = 'jalali';
+
     private const CALENDAR_HIJRI = 'hijri';
 
     /**

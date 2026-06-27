@@ -11,8 +11,7 @@ final readonly class ChainHolidayProvider implements HolidayProviderInterface
     public function __construct(
         private HolidayProviderInterface $configProvider,
         private HolidayProviderInterface $databaseProvider,
-    ) {
-    }
+    ) {}
 
     public function recurringHolidays(string $profile, string $calendar): array
     {

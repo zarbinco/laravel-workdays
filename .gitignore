@@ -1,1 +1,7 @@
 *.zip
+composer.lock
+REVIEW_NOTES.md
+vendor/
+.phpunit.result.cache
+.idea/
+.vscode/
