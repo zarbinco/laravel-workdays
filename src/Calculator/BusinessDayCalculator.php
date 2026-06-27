@@ -7,7 +7,9 @@ namespace Zarbinco\LaravelWorkdays\Calculator;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 use InvalidArgumentException;
+use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
+use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
 use Zarbinco\LaravelWorkdays\Support\WeekdayNormalizer;
 
 final class BusinessDayCalculator
@@ -17,6 +19,8 @@ final class BusinessDayCalculator
      */
     private readonly array $weekendDays;
 
+    private readonly JalaliCalendarAdapter $jalaliCalendar;
+
     /**
      * @param array<string, mixed> $profileConfig
      */
@@ -24,7 +28,10 @@ final class BusinessDayCalculator
         private readonly string $profile,
         private readonly array $profileConfig,
         private readonly bool $includeStartDate = false,
+        ?JalaliCalendarAdapter $jalaliCalendar = null,
     ) {
+        $this->jalaliCalendar = $jalaliCalendar ?? new JalaliCalendarAdapter();
+
         $weekends = $profileConfig['weekends'] ?? [];
 
         if (! is_array($weekends)) {
@@ -35,6 +42,8 @@ final class BusinessDayCalculator
             fn (mixed $weekday): int => $this->normalizeWeekend($weekday),
             $weekends,
         )));
+
+        $this->validateRecurringHolidayKeys();
     }
 
     public function isBusinessDay(string|DateTimeInterface $date): bool
@@ -71,7 +80,17 @@ final class BusinessDayCalculator
 
     public function isCalendarHoliday(string|DateTimeInterface $date): bool
     {
+        return $this->matchesCalendarHoliday(DateNormalizer::toImmutable($date));
+    }
+
+    public function isGregorianHoliday(string|DateTimeInterface $date): bool
+    {
         return $this->matchesRecurringGregorianHoliday(DateNormalizer::toImmutable($date));
+    }
+
+    public function isJalaliHoliday(string|DateTimeInterface $date): bool
+    {
+        return $this->matchesRecurringJalaliHoliday(DateNormalizer::toImmutable($date));
     }
 
     public function isCustomHoliday(string|DateTimeInterface $date): bool
@@ -156,7 +175,7 @@ final class BusinessDayCalculator
     {
         return $this->matchesWeekend($date)
             || $this->matchesCustomHoliday($date)
-            || $this->matchesRecurringGregorianHoliday($date);
+            || $this->matchesCalendarHoliday($date);
     }
 
     private function matchesCustomHoliday(CarbonImmutable $date): bool
@@ -172,19 +191,57 @@ final class BusinessDayCalculator
 
     private function matchesRecurringGregorianHoliday(CarbonImmutable $date): bool
     {
+        return array_key_exists($date->format('m-d'), $this->recurringGregorianHolidays());
+    }
+
+    private function matchesRecurringJalaliHoliday(CarbonImmutable $date): bool
+    {
+        return array_key_exists(
+            $this->jalaliCalendar->monthDayFromGregorian($date),
+            $this->recurringJalaliHolidays(),
+        );
+    }
+
+    private function matchesCalendarHoliday(CarbonImmutable $date): bool
+    {
+        return $this->matchesRecurringGregorianHoliday($date)
+            || $this->matchesRecurringJalaliHoliday($date);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function recurringGregorianHolidays(): array
+    {
+        return $this->recurringHolidays('gregorian');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function recurringJalaliHolidays(): array
+    {
+        return $this->recurringHolidays('jalali');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function recurringHolidays(string $calendar): array
+    {
         $holidays = $this->profileConfig['holidays'] ?? [];
 
         if (! is_array($holidays)) {
             throw new InvalidArgumentException(sprintf('The holidays config for profile [%s] must be an array.', $this->profile));
         }
 
-        $gregorian = $holidays['gregorian'] ?? [];
+        $recurringHolidays = $holidays[$calendar] ?? [];
 
-        if (! is_array($gregorian)) {
-            throw new InvalidArgumentException(sprintf('The gregorian holidays config for profile [%s] must be an array.', $this->profile));
+        if (! is_array($recurringHolidays)) {
+            throw new InvalidArgumentException(sprintf('The %s holidays config for profile [%s] must be an array.', $calendar, $this->profile));
         }
 
-        return array_key_exists($date->format('m-d'), $gregorian);
+        return $recurringHolidays;
     }
 
     private function matchesExtraWorkingDay(CarbonImmutable $date): bool
@@ -208,6 +265,31 @@ final class BusinessDayCalculator
         }
 
         return WeekdayNormalizer::toIso($weekday);
+    }
+
+    private function validateRecurringHolidayKeys(): void
+    {
+        foreach (array_keys($this->recurringGregorianHolidays()) as $key) {
+            if (! is_string($key)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Invalid gregorian recurring holiday key for profile [%s]. Expected a valid MM-DD string.',
+                    $this->profile,
+                ));
+            }
+
+            HolidayKeyValidator::validateGregorian($key, $this->profile);
+        }
+
+        foreach (array_keys($this->recurringJalaliHolidays()) as $key) {
+            if (! is_string($key)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Invalid jalali recurring holiday key for profile [%s]. Expected a valid MM-DD string.',
+                    $this->profile,
+                ));
+            }
+
+            HolidayKeyValidator::validateJalali($key, $this->profile);
+        }
     }
 
     /**

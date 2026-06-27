@@ -52,6 +52,16 @@ final class WorkdayManager
         return $this->defaultCalculator()->isCalendarHoliday($date);
     }
 
+    public function isGregorianHoliday(string|DateTimeInterface $date): bool
+    {
+        return $this->defaultCalculator()->isGregorianHoliday($date);
+    }
+
+    public function isJalaliHoliday(string|DateTimeInterface $date): bool
+    {
+        return $this->defaultCalculator()->isJalaliHoliday($date);
+    }
+
     public function isCustomHoliday(string|DateTimeInterface $date): bool
     {
         return $this->defaultCalculator()->isCustomHoliday($date);

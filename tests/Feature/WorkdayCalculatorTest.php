@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 
 use InvalidArgumentException;
+use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
 use Zarbinco\LaravelWorkdays\Support\WeekdayNormalizer;
@@ -103,13 +104,132 @@ final class WorkdayCalculatorTest extends TestCase
         $this->assertSame('2026-12-28', $result->toDateString());
     }
 
+    public function test_config_accepts_jalali_holiday_section(): void
+    {
+        $this->assertIsArray(config('workdays.profiles.iran.holidays.jalali'));
+        $this->assertIsArray(config('workdays.profiles.global.holidays.jalali'));
+    }
+
+    public function test_jalali_calendar_adapter_converts_between_gregorian_and_jalali(): void
+    {
+        $adapter = new JalaliCalendarAdapter();
+
+        $this->assertSame('04-01', $adapter->monthDayFromGregorian(DateNormalizer::toImmutable('2026-06-22')));
+        $this->assertSame('2026-06-22', $adapter->jalaliDateToGregorian(1405, 4, 1)->toDateString());
+    }
+
     public function test_is_holiday_returns_true_for_recurring_gregorian_holiday(): void
     {
         $calculator = Workday::profile('global');
 
+        $this->assertTrue($calculator->isGregorianHoliday('2026-12-25'));
         $this->assertTrue($calculator->isCalendarHoliday('2026-12-25'));
         $this->assertTrue($calculator->isHoliday('2026-12-25'));
         $this->assertFalse($calculator->isBusinessDay('2026-12-25'));
+    }
+
+    public function test_jalali_recurring_holiday_is_detected(): void
+    {
+        $this->setProfileConfig('iran', [
+            'holidays' => [
+                'jalali' => [
+                    '04-01' => 'Example Jalali Holiday',
+                ],
+            ],
+        ]);
+
+        $calculator = Workday::profile('iran');
+
+        $this->assertTrue($calculator->isJalaliHoliday('2026-06-22'));
+        $this->assertTrue($calculator->isCalendarHoliday('2026-06-22'));
+        $this->assertTrue($calculator->isHoliday('2026-06-22'));
+        $this->assertFalse($calculator->isBusinessDay('2026-06-22'));
+    }
+
+    public function test_jalali_recurring_holiday_is_skipped_by_add_business_days(): void
+    {
+        $this->setProfileConfig('iran', [
+            'holidays' => [
+                'jalali' => [
+                    '04-01' => 'Example Jalali Holiday',
+                ],
+            ],
+        ]);
+
+        $result = Workday::profile('iran')->addBusinessDays('2026-06-21', 1);
+
+        $this->assertSame('2026-06-23', $result->toDateString());
+    }
+
+    public function test_gregorian_holiday_still_works_after_jalali_support(): void
+    {
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isGregorianHoliday('2026-12-25'));
+        $this->assertTrue($calculator->isCalendarHoliday('2026-12-25'));
+        $this->assertTrue($calculator->isHoliday('2026-12-25'));
+    }
+
+    public function test_is_gregorian_holiday_returns_true_only_for_gregorian_recurring_holidays(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'jalali' => [
+                    '04-01' => 'Example Jalali Holiday',
+                ],
+            ],
+        ]);
+
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isGregorianHoliday('2026-12-25'));
+        $this->assertFalse($calculator->isGregorianHoliday('2026-06-22'));
+    }
+
+    public function test_is_jalali_holiday_returns_true_only_for_jalali_recurring_holidays(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'jalali' => [
+                    '04-01' => 'Example Jalali Holiday',
+                ],
+            ],
+        ]);
+
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isJalaliHoliday('2026-06-22'));
+        $this->assertFalse($calculator->isJalaliHoliday('2026-12-25'));
+    }
+
+    public function test_is_calendar_holiday_returns_true_for_gregorian_or_jalali_recurring_holidays(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'jalali' => [
+                    '04-01' => 'Example Jalali Holiday',
+                ],
+            ],
+        ]);
+
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isCalendarHoliday('2026-12-25'));
+        $this->assertTrue($calculator->isCalendarHoliday('2026-06-22'));
+    }
+
+    public function test_is_calendar_holiday_does_not_include_custom_holidays(): void
+    {
+        $this->setProfileConfig('global', [
+            'custom_holidays' => [
+                '2026-06-29' => 'Company holiday',
+            ],
+        ]);
+
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isCustomHoliday('2026-06-29'));
+        $this->assertFalse($calculator->isCalendarHoliday('2026-06-29'));
     }
 
     public function test_extra_working_day_overrides_weekend(): void
@@ -181,6 +301,27 @@ final class WorkdayCalculatorTest extends TestCase
 
         $this->assertTrue($calculator->isExtraWorkingDay('2026-06-27'));
         $this->assertFalse($calculator->isExtraWorkingDay('2026-06-28'));
+    }
+
+    public function test_extra_working_day_overrides_jalali_holiday(): void
+    {
+        $this->setProfileConfig('iran', [
+            'holidays' => [
+                'jalali' => [
+                    '04-01' => 'Example Jalali Holiday',
+                ],
+            ],
+            'extra_working_days' => [
+                '2026-06-22' => 'Compensation working day',
+            ],
+        ]);
+
+        $calculator = Workday::profile('iran');
+
+        $this->assertTrue($calculator->isJalaliHoliday('2026-06-22'));
+        $this->assertTrue($calculator->isCalendarHoliday('2026-06-22'));
+        $this->assertTrue($calculator->isBusinessDay('2026-06-22'));
+        $this->assertFalse($calculator->isHoliday('2026-06-22'));
     }
 
     public function test_is_non_working_day_aliases_is_holiday(): void
@@ -305,6 +446,54 @@ final class WorkdayCalculatorTest extends TestCase
         $this->expectExceptionMessage('Invalid weekend value for profile [invalid-weekend]');
 
         Workday::profile('invalid-weekend');
+    }
+
+    public function test_invalid_jalali_month_key_throws_exception(): void
+    {
+        $this->setProfileConfig('iran', [
+            'holidays' => [
+                'jalali' => [
+                    '13-01' => 'Invalid holiday',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid jalali recurring holiday key [13-01]');
+
+        Workday::profile('iran');
+    }
+
+    public function test_invalid_jalali_day_key_throws_exception(): void
+    {
+        $this->setProfileConfig('iran', [
+            'holidays' => [
+                'jalali' => [
+                    '01-32' => 'Invalid holiday',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid jalali recurring holiday key [01-32]');
+
+        Workday::profile('iran');
+    }
+
+    public function test_invalid_gregorian_month_key_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'gregorian' => [
+                    '13-01' => 'Invalid holiday',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid gregorian recurring holiday key [13-01]');
+
+        Workday::profile('global');
     }
 
     /**

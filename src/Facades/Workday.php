@@ -13,6 +13,8 @@ use Illuminate\Support\Facades\Facade;
  * @method static bool isNonWorkingDay(string|\DateTimeInterface $date)
  * @method static bool isWeekend(string|\DateTimeInterface $date)
  * @method static bool isCalendarHoliday(string|\DateTimeInterface $date)
+ * @method static bool isGregorianHoliday(string|\DateTimeInterface $date)
+ * @method static bool isJalaliHoliday(string|\DateTimeInterface $date)
  * @method static bool isCustomHoliday(string|\DateTimeInterface $date)
  * @method static bool isExtraWorkingDay(string|\DateTimeInterface $date)
  * @method static \Carbon\CarbonImmutable addBusinessDays(string|\DateTimeInterface $date, int $days)

@@ -7,6 +7,11 @@ return [
 
     'include_start_date' => false,
 
+    'hijri' => [
+        'method' => 'umm_al_qura',
+        'adjustment' => 0,
+    ],
+
     'profiles' => [
         'iran' => [
             'weekends' => ['Thursday', 'Friday'],
@@ -14,6 +19,16 @@ return [
             'holidays' => [
                 'gregorian' => [
                     // '01-01' => 'New Year',
+                ],
+
+                'jalali' => [
+                    // '01-01' => 'Nowruz',
+                    // '04-01' => 'Example Jalali Holiday',
+                ],
+
+                'hijri' => [
+                    // '01-09' => 'Tasu’a',
+                    // '01-10' => 'Ashura',
                 ],
             ],
 
@@ -33,6 +48,15 @@ return [
                 'gregorian' => [
                     '01-01' => 'New Year',
                     '12-25' => 'Christmas',
+                ],
+
+                'jalali' => [
+                    // '01-01' => 'Nowruz',
+                ],
+
+                'hijri' => [
+                    // '01-09' => 'Tasu’a',
+                    // '01-10' => 'Ashura',
                 ],
             ],
 
