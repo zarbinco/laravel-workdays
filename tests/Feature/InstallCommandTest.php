@@ -9,8 +9,9 @@ use Illuminate\Support\Facades\File;
 use Illuminate\Support\ServiceProvider;
 use ReflectionClass;
 use Zarbinco\LaravelWorkdays\Commands\InstallCommand;
-use Zarbinco\LaravelWorkdays\WorkdaysServiceProvider;
+use Zarbinco\LaravelWorkdays\Support\StorageDriver;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
+use Zarbinco\LaravelWorkdays\WorkdaysServiceProvider;
 
 final class InstallCommandTest extends TestCase
 {
@@ -27,6 +28,10 @@ final class InstallCommandTest extends TestCase
     private ?string $temporaryDirectory = null;
 
     private ?string $publishPath = null;
+
+    private ?string $firstMigrationPath = null;
+
+    private ?string $secondMigrationPath = null;
 
     protected function tearDown(): void
     {
@@ -55,6 +60,7 @@ final class InstallCommandTest extends TestCase
         $this->assertSame(0, $exitCode);
         $this->assertStringContainsString('Laravel Workdays default config was installed.', Artisan::output());
         $this->assertSame('iran', $config['default_profile']);
+        $this->assertSame('config', $config['storage']['driver']);
         $this->assertArrayHasKey('iran', $config['profiles']);
         $this->assertSame([], $config['profiles']['iran']['holidays']['jalali']);
     }
@@ -102,15 +108,73 @@ final class InstallCommandTest extends TestCase
         $this->assertFileDoesNotExist($this->publishPath);
     }
 
-    public function test_database_storage_returns_failure_and_clear_message(): void
+    public function test_database_storage_publishes_migrations_and_sets_driver(): void
     {
         $this->fakePublishDestination();
 
         $exitCode = Artisan::call('workdays:install', ['--storage' => 'database']);
+        $output = Artisan::output();
+        $config = require $this->publishPath;
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame('database', $config['storage']['driver']);
+        $this->assertFileExists($this->firstMigrationPath);
+        $this->assertFileExists($this->secondMigrationPath);
+        $this->assertStringContainsString('Laravel Workdays database storage migrations were published.', $output);
+        $this->assertStringContainsString('No migrations were run automatically.', $output);
+    }
+
+    public function test_chain_storage_publishes_migrations_and_sets_driver(): void
+    {
+        $this->fakePublishDestination();
+
+        $exitCode = Artisan::call('workdays:install', ['--storage' => 'chain']);
+        $config = require $this->publishPath;
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame('chain', $config['storage']['driver']);
+        $this->assertFileExists($this->firstMigrationPath);
+        $this->assertFileExists($this->secondMigrationPath);
+        $this->assertStringContainsString('Laravel Workdays chain storage migrations were published.', Artisan::output());
+    }
+
+    public function test_unsupported_storage_returns_failure_and_clear_message(): void
+    {
+        $this->fakePublishDestination();
+
+        $exitCode = Artisan::call('workdays:install', ['--storage' => 'redis']);
 
         $this->assertSame(1, $exitCode);
-        $this->assertStringContainsString('Database storage is not implemented yet. Database mode is planned for Phase 5.', Artisan::output());
+        $this->assertStringContainsString(StorageDriver::unsupportedMessage('redis'), Artisan::output());
         $this->assertFileDoesNotExist($this->publishPath);
+    }
+
+    public function test_iran_preset_with_database_storage_publishes_iran_config_with_database_driver(): void
+    {
+        $this->fakePublishDestination();
+
+        $exitCode = Artisan::call('workdays:install', ['--preset' => 'iran', '--storage' => 'database']);
+        $config = require $this->publishPath;
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame('database', $config['storage']['driver']);
+        $this->assertSame('Nowruz', $config['profiles']['iran']['holidays']['jalali']['01-01']);
+        $this->assertFileExists($this->firstMigrationPath);
+        $this->assertFileExists($this->secondMigrationPath);
+    }
+
+    public function test_persian_option_with_chain_storage_publishes_iran_config_with_chain_driver(): void
+    {
+        $this->fakePublishDestination();
+
+        $exitCode = Artisan::call('workdays:install', ['--persian' => true, '--storage' => 'chain']);
+        $config = require $this->publishPath;
+
+        $this->assertSame(0, $exitCode);
+        $this->assertSame('chain', $config['storage']['driver']);
+        $this->assertSame('Nowruz', $config['profiles']['iran']['holidays']['jalali']['01-01']);
+        $this->assertFileExists($this->firstMigrationPath);
+        $this->assertFileExists($this->secondMigrationPath);
     }
 
     /**
@@ -133,7 +197,17 @@ final class InstallCommandTest extends TestCase
         $this->temporaryDirectory ??= sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'laravel-workdays-' . bin2hex(random_bytes(8));
         File::ensureDirectoryExists($this->temporaryDirectory);
 
-        $this->publishPath = $this->temporaryDirectory . DIRECTORY_SEPARATOR . 'workdays-' . bin2hex(random_bytes(4)) . '.php';
+        if (method_exists($this->app, 'useConfigPath')) {
+            $this->app->useConfigPath($this->temporaryDirectory);
+        }
+
+        $this->publishPath = config_path('workdays.php');
+        $this->firstMigrationPath = $this->temporaryDirectory . DIRECTORY_SEPARATOR . 'migrations' . DIRECTORY_SEPARATOR . '2026_01_01_000001_create_workday_holiday_rules_table.php';
+        $this->secondMigrationPath = $this->temporaryDirectory . DIRECTORY_SEPARATOR . 'migrations' . DIRECTORY_SEPARATOR . '2026_01_01_000002_create_workday_special_dates_table.php';
+
+        File::delete($this->publishPath);
+        File::delete($this->firstMigrationPath);
+        File::delete($this->secondMigrationPath);
 
         $this->replacePublishMaps($this->publishPath);
     }
@@ -148,10 +222,14 @@ final class InstallCommandTest extends TestCase
 
         $defaultConfig = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'workdays.php';
         $iranConfig = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'workdays-iran.php';
+        $firstMigration = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'database' . DIRECTORY_SEPARATOR . 'migrations' . DIRECTORY_SEPARATOR . '2026_01_01_000001_create_workday_holiday_rules_table.php';
+        $secondMigration = dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'database' . DIRECTORY_SEPARATOR . 'migrations' . DIRECTORY_SEPARATOR . '2026_01_01_000002_create_workday_special_dates_table.php';
 
         $publishes[WorkdaysServiceProvider::class] = [
             $defaultConfig => $destination,
             $iranConfig => $destination,
+            $firstMigration => $this->firstMigrationPath,
+            $secondMigration => $this->secondMigrationPath,
         ];
 
         $publishGroups['workdays-config'] = [
@@ -160,6 +238,11 @@ final class InstallCommandTest extends TestCase
 
         $publishGroups['workdays-config-iran'] = [
             $iranConfig => $destination,
+        ];
+
+        $publishGroups['workdays-migrations'] = [
+            $firstMigration => $this->firstMigrationPath,
+            $secondMigration => $this->secondMigrationPath,
         ];
 
         $this->setStaticServiceProviderProperty('publishes', $publishes);

@@ -8,6 +8,10 @@ use InvalidArgumentException;
 
 final class HolidayKeyValidator
 {
+    private const CALENDAR_GREGORIAN = 'gregorian';
+    private const CALENDAR_JALALI = 'jalali';
+    private const CALENDAR_HIJRI = 'hijri';
+
     /**
      * @var array<int, int>
      */
@@ -64,34 +68,65 @@ final class HolidayKeyValidator
 
     public static function validateGregorian(string $key, string $profile): void
     {
-        self::validate($key, $profile, 'Gregorian', self::GREGORIAN_DAYS_IN_MONTH);
+        self::validate(self::CALENDAR_GREGORIAN, $key, $profile);
     }
 
     public static function validateJalali(string $key, string $profile): void
     {
-        self::validate($key, $profile, 'Jalali', self::JALALI_DAYS_IN_MONTH);
+        self::validate(self::CALENDAR_JALALI, $key, $profile);
     }
 
     public static function validateHijri(string $key, string $profile): void
     {
-        self::validate($key, $profile, 'Hijri', self::HIJRI_DAYS_IN_MONTH);
+        self::validate(self::CALENDAR_HIJRI, $key, $profile);
     }
 
     /**
-     * @param array<int, int> $daysInMonth
+     * @return array<int, string>
      */
-    private static function validate(string $key, string $profile, string $calendar, array $daysInMonth): void
+    public static function supportedCalendars(): array
+    {
+        return [
+            self::CALENDAR_GREGORIAN,
+            self::CALENDAR_JALALI,
+            self::CALENDAR_HIJRI,
+        ];
+    }
+
+    public static function validate(string $calendar, string $key, string $profile): void
     {
         if (! preg_match('/^(?<month>\d{2})-(?<day>\d{2})$/', $key, $matches)) {
             self::throwInvalidKey($key, $profile, $calendar);
         }
 
-        $month = (int) $matches['month'];
-        $day = (int) $matches['day'];
+        self::validateMonthDay($calendar, (int) $matches['month'], (int) $matches['day'], $profile, $key);
+    }
+
+    public static function validateMonthDay(string $calendar, int $month, int $day, string $profile, ?string $key = null): void
+    {
+        $daysInMonth = self::daysInMonth($calendar, $profile, $key ?? sprintf('%02d-%02d', $month, $day));
 
         if (! array_key_exists($month, $daysInMonth) || $day < 1 || $day > $daysInMonth[$month]) {
-            self::throwInvalidKey($key, $profile, $calendar);
+            self::throwInvalidKey($key ?? sprintf('%02d-%02d', $month, $day), $profile, $calendar);
         }
+    }
+
+    /**
+     * @return array<int, int>
+     */
+    private static function daysInMonth(string $calendar, string $profile, string $key): array
+    {
+        return match ($calendar) {
+            self::CALENDAR_GREGORIAN => self::GREGORIAN_DAYS_IN_MONTH,
+            self::CALENDAR_JALALI => self::JALALI_DAYS_IN_MONTH,
+            self::CALENDAR_HIJRI => self::HIJRI_DAYS_IN_MONTH,
+            default => throw new InvalidArgumentException(sprintf(
+                'Invalid recurring holiday calendar type [%s] for profile [%s] and key [%s].',
+                $calendar,
+                $profile,
+                $key,
+            )),
+        };
     }
 
     private static function throwInvalidKey(string $key, string $profile, string $calendar): never

@@ -27,6 +27,11 @@ final class WorkdaysServiceProvider extends ServiceProvider
             __DIR__ . '/../config/workdays-iran.php' => config_path('workdays.php'),
         ], 'workdays-config-iran');
 
+        $this->publishes([
+            __DIR__ . '/../database/migrations/2026_01_01_000001_create_workday_holiday_rules_table.php' => database_path('migrations/2026_01_01_000001_create_workday_holiday_rules_table.php'),
+            __DIR__ . '/../database/migrations/2026_01_01_000002_create_workday_special_dates_table.php' => database_path('migrations/2026_01_01_000002_create_workday_special_dates_table.php'),
+        ], 'workdays-migrations');
+
         if ($this->app->runningInConsole()) {
             $this->commands([
                 InstallCommand::class,

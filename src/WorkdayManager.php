@@ -10,6 +10,11 @@ use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
+use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
+use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
+use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
+use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
+use Zarbinco\LaravelWorkdays\Support\StorageDriver;
 
 final class WorkdayManager
 {
@@ -26,6 +31,7 @@ final class WorkdayManager
             profileConfig: $profiles[$profile],
             includeStartDate: $this->includeStartDate(),
             hijriCalendar: HijriCalendarAdapter::fromConfig(),
+            holidayProvider: $this->holidayProvider($profiles),
         );
     }
 
@@ -137,5 +143,26 @@ final class WorkdayManager
     private function includeStartDate(): bool
     {
         return (bool) config('workdays.include_start_date', false);
+    }
+
+    /**
+     * @param array<string, array<string, mixed>> $profiles
+     */
+    private function holidayProvider(array $profiles): HolidayProviderInterface
+    {
+        $driver = config('workdays.storage.driver', 'config');
+
+        if (! is_string($driver) || $driver === '') {
+            throw new InvalidArgumentException('The workdays storage.driver config value must be a non-empty string.');
+        }
+
+        $configProvider = new ConfigHolidayProvider($profiles);
+
+        return match ($driver) {
+            StorageDriver::CONFIG => $configProvider,
+            StorageDriver::DATABASE => new DatabaseHolidayProvider(),
+            StorageDriver::CHAIN => new ChainHolidayProvider($configProvider, new DatabaseHolidayProvider()),
+            default => throw new InvalidArgumentException(StorageDriver::unsupportedMessage($driver)),
+        };
     }
 }

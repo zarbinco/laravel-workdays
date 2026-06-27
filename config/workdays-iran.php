@@ -25,6 +25,10 @@ return [
 
     'include_start_date' => false,
 
+    'storage' => [
+        'driver' => 'config',
+    ],
+
     'hijri' => [
         'method' => 'umm_al_qura',
         'adjustment' => 0,
