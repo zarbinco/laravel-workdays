@@ -19,6 +19,12 @@ final class WorkdaysServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        $migrationPath = __DIR__.'/../database/migrations';
+        $migrations = [
+            $migrationPath.'/2026_01_01_000001_create_workday_holiday_rules_table.php' => database_path('migrations/2026_01_01_000001_create_workday_holiday_rules_table.php'),
+            $migrationPath.'/2026_01_01_000002_create_workday_special_dates_table.php' => database_path('migrations/2026_01_01_000002_create_workday_special_dates_table.php'),
+        ];
+
         $this->publishes([
             __DIR__.'/../config/workdays.php' => config_path('workdays.php'),
         ], 'workdays-config');
@@ -27,10 +33,11 @@ final class WorkdaysServiceProvider extends ServiceProvider
             __DIR__.'/../config/workdays-iran.php' => config_path('workdays.php'),
         ], 'workdays-config-iran');
 
-        $this->publishes([
-            __DIR__.'/../database/migrations/2026_01_01_000001_create_workday_holiday_rules_table.php' => database_path('migrations/2026_01_01_000001_create_workday_holiday_rules_table.php'),
-            __DIR__.'/../database/migrations/2026_01_01_000002_create_workday_special_dates_table.php' => database_path('migrations/2026_01_01_000002_create_workday_special_dates_table.php'),
-        ], 'workdays-migrations');
+        if (method_exists($this, 'publishesMigrations')) {
+            $this->publishesMigrations($migrations, 'workdays-migrations');
+        } else {
+            $this->publishes($migrations, 'workdays-migrations');
+        }
 
         if ($this->app->runningInConsole()) {
             $this->commands([

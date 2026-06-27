@@ -95,6 +95,16 @@ final class HolidayKeyValidator
         ];
     }
 
+    public static function isSupportedCalendar(string $calendar): bool
+    {
+        return in_array($calendar, self::supportedCalendars(), true);
+    }
+
+    public static function supportedList(): string
+    {
+        return implode(', ', self::supportedCalendars());
+    }
+
     public static function validate(string $calendar, string $key, string $profile): void
     {
         if (! preg_match('/^(?<month>\d{2})-(?<day>\d{2})$/', $key, $matches)) {

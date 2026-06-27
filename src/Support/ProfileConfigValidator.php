@@ -18,9 +18,7 @@ final class ProfileConfigValidator
             throw new InvalidArgumentException(sprintf('The workdays profile [%s] config must be an array.', $profile));
         }
 
-        if (! array_key_exists('weekends', $profileConfig) || ! is_array($profileConfig['weekends'])) {
-            throw new InvalidArgumentException(sprintf('The weekends config for profile [%s] must be an array.', $profile));
-        }
+        self::validateWeekends($profile, $profileConfig['weekends'] ?? null);
 
         if (array_key_exists('holidays', $profileConfig)) {
             self::validateHolidays($profile, $profileConfig['holidays']);
@@ -61,13 +59,56 @@ final class ProfileConfigValidator
             throw new InvalidArgumentException(sprintf('The holidays config for profile [%s] must be an array.', $profile));
         }
 
-        foreach (HolidayKeyValidator::supportedCalendars() as $calendar) {
-            if (! array_key_exists($calendar, $holidays)) {
-                continue;
+        foreach ($holidays as $calendar => $recurringHolidays) {
+            if (! is_string($calendar) || ! HolidayKeyValidator::isSupportedCalendar($calendar)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Unsupported holidays calendar [%s] for profile [%s]. Supported calendars are: %s.',
+                    self::describeConfigKey($calendar),
+                    $profile,
+                    HolidayKeyValidator::supportedList(),
+                ));
             }
 
-            if (! is_array($holidays[$calendar])) {
+            if (! is_array($recurringHolidays)) {
                 throw new InvalidArgumentException(sprintf('The holidays.%s config for profile [%s] must be an array.', $calendar, $profile));
+            }
+
+            foreach (array_keys($recurringHolidays) as $key) {
+                if (! is_string($key)) {
+                    throw new InvalidArgumentException(sprintf(
+                        'Invalid %s recurring holiday key for profile [%s]. Expected a valid MM-DD string.',
+                        $calendar,
+                        $profile,
+                    ));
+                }
+
+                HolidayKeyValidator::validate($calendar, $key, $profile);
+            }
+        }
+    }
+
+    private static function validateWeekends(string $profile, mixed $weekends): void
+    {
+        if (! is_array($weekends)) {
+            throw new InvalidArgumentException(sprintf('The weekends config for profile [%s] must be an array.', $profile));
+        }
+
+        foreach ($weekends as $weekday) {
+            if (! is_int($weekday) && ! is_string($weekday)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Invalid weekend value for profile [%s]. Expected an integer ISO weekday or weekday name string.',
+                    $profile,
+                ));
+            }
+
+            try {
+                WeekdayNormalizer::toIso($weekday);
+            } catch (InvalidArgumentException $exception) {
+                throw new InvalidArgumentException(sprintf(
+                    'Invalid weekend value [%s] for profile [%s]. Expected an ISO weekday integer from 1 to 7 or a supported weekday name.',
+                    self::describeConfigKey($weekday),
+                    $profile,
+                ), previous: $exception);
             }
         }
     }
@@ -111,5 +152,14 @@ final class ProfileConfigValidator
             $date,
             $profile,
         ));
+    }
+
+    private static function describeConfigKey(mixed $key): string
+    {
+        if (is_int($key) || is_string($key)) {
+            return (string) $key;
+        }
+
+        return get_debug_type($key);
     }
 }

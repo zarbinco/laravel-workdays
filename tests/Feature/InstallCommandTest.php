@@ -29,6 +29,8 @@ final class InstallCommandTest extends TestCase
 
     private ?string $publishPath = null;
 
+    private ?string $migrationDirectory = null;
+
     private ?string $firstMigrationPath = null;
 
     private ?string $secondMigrationPath = null;
@@ -48,6 +50,25 @@ final class InstallCommandTest extends TestCase
     {
         $this->assertArrayHasKey('workdays:install', Artisan::all());
         $this->assertInstanceOf(InstallCommand::class, Artisan::all()['workdays:install']);
+    }
+
+    public function test_service_provider_marks_migrations_for_publish_time_timestamp_updates_when_supported(): void
+    {
+        if (! method_exists(ServiceProvider::class, 'publishableMigrationPaths')) {
+            $this->markTestSkipped('The installed Laravel version does not expose publishable migration paths.');
+        }
+
+        if (! config('database.migrations.update_date_on_publish', false)) {
+            $this->markTestSkipped('The installed Laravel version does not update migration dates on publish.');
+        }
+
+        $publishableMigrationPaths = array_map(
+            static fn (string $path): string|false => realpath($path),
+            ServiceProvider::publishableMigrationPaths(),
+        );
+
+        $this->assertContains(realpath($this->migrationSourcePath('2026_01_01_000001_create_workday_holiday_rules_table.php')), $publishableMigrationPaths);
+        $this->assertContains(realpath($this->migrationSourcePath('2026_01_01_000002_create_workday_special_dates_table.php')), $publishableMigrationPaths);
     }
 
     public function test_install_command_publishes_default_config(): void
@@ -118,8 +139,8 @@ final class InstallCommandTest extends TestCase
 
         $this->assertSame(0, $exitCode);
         $this->assertSame('database', $config['storage']['driver']);
-        $this->assertFileExists($this->firstMigrationPath);
-        $this->assertFileExists($this->secondMigrationPath);
+        $this->assertMigrationPublished('create_workday_holiday_rules_table');
+        $this->assertMigrationPublished('create_workday_special_dates_table');
         $this->assertStringContainsString('Laravel Workdays database storage migrations were published.', $output);
         $this->assertStringContainsString('No migrations were run automatically.', $output);
     }
@@ -133,8 +154,8 @@ final class InstallCommandTest extends TestCase
 
         $this->assertSame(0, $exitCode);
         $this->assertSame('chain', $config['storage']['driver']);
-        $this->assertFileExists($this->firstMigrationPath);
-        $this->assertFileExists($this->secondMigrationPath);
+        $this->assertMigrationPublished('create_workday_holiday_rules_table');
+        $this->assertMigrationPublished('create_workday_special_dates_table');
         $this->assertStringContainsString('Laravel Workdays chain storage migrations were published.', Artisan::output());
     }
 
@@ -159,8 +180,8 @@ final class InstallCommandTest extends TestCase
         $this->assertSame(0, $exitCode);
         $this->assertSame('database', $config['storage']['driver']);
         $this->assertSame('Nowruz', $config['profiles']['iran']['holidays']['jalali']['01-01']);
-        $this->assertFileExists($this->firstMigrationPath);
-        $this->assertFileExists($this->secondMigrationPath);
+        $this->assertMigrationPublished('create_workday_holiday_rules_table');
+        $this->assertMigrationPublished('create_workday_special_dates_table');
     }
 
     public function test_persian_option_with_chain_storage_publishes_iran_config_with_chain_driver(): void
@@ -173,8 +194,8 @@ final class InstallCommandTest extends TestCase
         $this->assertSame(0, $exitCode);
         $this->assertSame('chain', $config['storage']['driver']);
         $this->assertSame('Nowruz', $config['profiles']['iran']['holidays']['jalali']['01-01']);
-        $this->assertFileExists($this->firstMigrationPath);
-        $this->assertFileExists($this->secondMigrationPath);
+        $this->assertMigrationPublished('create_workday_holiday_rules_table');
+        $this->assertMigrationPublished('create_workday_special_dates_table');
     }
 
     /**
@@ -202,12 +223,13 @@ final class InstallCommandTest extends TestCase
         }
 
         $this->publishPath = config_path('workdays.php');
-        $this->firstMigrationPath = $this->temporaryDirectory.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.'2026_01_01_000001_create_workday_holiday_rules_table.php';
-        $this->secondMigrationPath = $this->temporaryDirectory.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.'2026_01_01_000002_create_workday_special_dates_table.php';
+        $this->migrationDirectory = $this->temporaryDirectory.DIRECTORY_SEPARATOR.'migrations';
+        $this->firstMigrationPath = $this->migrationDirectory.DIRECTORY_SEPARATOR.'2026_01_01_000001_create_workday_holiday_rules_table.php';
+        $this->secondMigrationPath = $this->migrationDirectory.DIRECTORY_SEPARATOR.'2026_01_01_000002_create_workday_special_dates_table.php';
 
         File::delete($this->publishPath);
-        File::delete($this->firstMigrationPath);
-        File::delete($this->secondMigrationPath);
+        File::delete($this->migrationFiles('create_workday_holiday_rules_table'));
+        File::delete($this->migrationFiles('create_workday_special_dates_table'));
 
         $this->replacePublishMaps($this->publishPath);
     }
@@ -222,8 +244,8 @@ final class InstallCommandTest extends TestCase
 
         $defaultConfig = dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays.php';
         $iranConfig = dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays-iran.php';
-        $firstMigration = dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.'2026_01_01_000001_create_workday_holiday_rules_table.php';
-        $secondMigration = dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.'2026_01_01_000002_create_workday_special_dates_table.php';
+        $firstMigration = $this->migrationSourcePath('2026_01_01_000001_create_workday_holiday_rules_table.php');
+        $secondMigration = $this->migrationSourcePath('2026_01_01_000002_create_workday_special_dates_table.php');
 
         $publishes[WorkdaysServiceProvider::class] = [
             $defaultConfig => $destination,
@@ -279,5 +301,27 @@ final class InstallCommandTest extends TestCase
         $property = (new ReflectionClass(ServiceProvider::class))->getProperty($name);
         $property->setAccessible(true);
         $property->setValue(null, $value);
+    }
+
+    private function assertMigrationPublished(string $migration): void
+    {
+        $this->assertNotSame([], $this->migrationFiles($migration), sprintf('Migration [%s] was not published.', $migration));
+    }
+
+    /**
+     * @return array<int, string>
+     */
+    private function migrationFiles(string $migration): array
+    {
+        if ($this->migrationDirectory === null) {
+            return [];
+        }
+
+        return File::glob($this->migrationDirectory.DIRECTORY_SEPARATOR.'*_'.$migration.'.php') ?: [];
+    }
+
+    private function migrationSourcePath(string $filename): string
+    {
+        return dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations'.DIRECTORY_SEPARATOR.$filename;
     }
 }

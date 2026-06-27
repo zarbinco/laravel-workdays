@@ -33,6 +33,16 @@ final class ReleaseReadinessTest extends TestCase
         Workday::profile('global');
     }
 
+    public function test_max_scan_days_must_be_an_integer(): void
+    {
+        config()->set('workdays.max_scan_days', '3660');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The workdays max_scan_days config value must be a positive integer.');
+
+        Workday::profile('global');
+    }
+
     public function test_next_business_day_throws_when_no_business_day_found_within_max_scan_days(): void
     {
         $this->configureImpossibleBusinessDayProfile();
@@ -125,6 +135,52 @@ final class ReleaseReadinessTest extends TestCase
         Workday::profile('global');
     }
 
+    public function test_profiles_config_must_be_array(): void
+    {
+        config()->set('workdays.profiles', 'invalid');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The workdays profiles config value must be an array.');
+
+        Workday::profile('global');
+    }
+
+    public function test_weekends_config_must_be_array(): void
+    {
+        $this->setProfileConfig('global', [
+            'weekends' => 'Friday',
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The weekends config for profile [global] must be an array.');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_weekday_name_in_weekends_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'weekends' => ['Funday'],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid weekend value [Funday] for profile [global].');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_weekend_iso_value_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'weekends' => [8],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid weekend value [8] for profile [global].');
+
+        Workday::profile('global');
+    }
+
     public function test_holidays_config_must_be_array(): void
     {
         $this->setProfileConfig('global', [
@@ -133,6 +189,70 @@ final class ReleaseReadinessTest extends TestCase
 
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('The holidays config for profile [global] must be an array.');
+
+        Workday::profile('global');
+    }
+
+    public function test_unknown_holiday_calendar_key_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'jallali' => [
+                    '01-01' => 'Typo calendar',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Unsupported holidays calendar [jallali] for profile [global]. Supported calendars are: gregorian, jalali, hijri.');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_gregorian_holiday_key_format_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'gregorian' => [
+                    '2026-01-01' => 'Invalid recurring holiday',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid gregorian recurring holiday key [2026-01-01]');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_jalali_holiday_key_format_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'jalali' => [
+                    '1-01' => 'Invalid recurring holiday',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid jalali recurring holiday key [1-01]');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_hijri_holiday_key_format_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => [
+                    '01/09' => 'Invalid recurring holiday',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid hijri recurring holiday key [01/09]');
 
         Workday::profile('global');
     }

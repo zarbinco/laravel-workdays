@@ -4,6 +4,11 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Hardened the v1.0.0 release surface with an explicit Laravel/PHP CI matrix.
+- Narrowed declared Laravel support to Laravel 12 and 13 so Composer metadata matches secure, installable CI coverage.
+- Improved migration publishing to use Laravel's package migration publishing helper when available.
+- Tightened config validation for unknown holiday calendars, invalid recurring holiday keys, invalid weekend values, storage drivers, profile shape, and `max_scan_days`.
+- Polished README badges, compatibility notes, storage documentation, migration publishing notes, and Iran preset limitations.
 - Added the core Laravel-first workday and business-day calculation engine.
 - Added config-backed workday profiles with default profile support.
 - Added Gregorian, Jalali, and Hijri recurring holiday support.

@@ -1,5 +1,12 @@
 # Laravel Workdays
 
+[![Tests](https://github.com/zarbinco/laravel-workdays/actions/workflows/tests.yml/badge.svg)](https://github.com/zarbinco/laravel-workdays/actions/workflows/tests.yml)
+[![Latest Version on Packagist](https://img.shields.io/packagist/v/zarbinco/laravel-workdays.svg?style=flat-square)](https://packagist.org/packages/zarbinco/laravel-workdays)
+[![Total Downloads](https://img.shields.io/packagist/dt/zarbinco/laravel-workdays.svg?style=flat-square)](https://packagist.org/packages/zarbinco/laravel-workdays)
+[![PHP Version](https://img.shields.io/packagist/php-v/zarbinco/laravel-workdays.svg?style=flat-square)](https://packagist.org/packages/zarbinco/laravel-workdays)
+[![License](https://img.shields.io/packagist/l/zarbinco/laravel-workdays.svg?style=flat-square)](LICENSE)
+[![Laravel](https://img.shields.io/badge/Laravel-12%20%7C%2013-ff2d20?style=flat-square)](https://laravel.com)
+
 `zarbinco/laravel-workdays` is a Laravel-first workday and business-day calculation engine.
 
 It answers questions like "is this date a business day?", "what is the next business day?", and "how many business days are between these dates?" using configurable profiles, weekends, holidays, and exact working-day overrides.
@@ -27,6 +34,12 @@ Calendars are used internally only to resolve recurring holiday definitions agai
 ```bash
 composer require zarbinco/laravel-workdays
 ```
+
+## Compatibility
+
+This release supports PHP `^8.2` and Laravel 12 and 13 through the Illuminate components declared in `composer.json`.
+
+Laravel's own PHP requirements still apply. The CI matrix tests Laravel 12 on PHP 8.2, 8.3, and 8.4, and Laravel 13 on PHP 8.3 and 8.4.
 
 ## Config Publishing
 
@@ -213,6 +226,8 @@ php artisan vendor:publish --tag=workdays-migrations
 php artisan migrate
 ```
 
+When the installed Laravel version supports package migration publishing, migration filenames are timestamped at publish time. Older framework fallbacks publish the bundled migration filenames.
+
 The installer can publish config and migrations together:
 
 ```bash
@@ -398,6 +413,12 @@ Supported storage drivers:
 - `chain`: combines config and database storage.
 
 The default storage driver is `config`.
+
+## Config Validation
+
+Invalid config fails fast with `InvalidArgumentException`. The package validates profile shape, weekend values, storage drivers, recurring holiday calendar keys, recurring `MM-DD` holiday keys, exact Gregorian `Y-m-d` date keys, and `max_scan_days`.
+
+For example, `jallali` is rejected as an unknown calendar key; use `jalali`.
 
 ## Troubleshooting
 

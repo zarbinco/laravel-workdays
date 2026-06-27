@@ -11,7 +11,7 @@ final class ComposerDependencyTest extends TestCase
     public function test_composer_requires_illuminate_console(): void
     {
         $this->assertSame(
-            '^10.0|^11.0|^12.0|^13.0',
+            '^12.0|^13.0',
             $this->composerRequire()['illuminate/console'] ?? null,
         );
     }
@@ -19,7 +19,7 @@ final class ComposerDependencyTest extends TestCase
     public function test_composer_requires_illuminate_database(): void
     {
         $this->assertSame(
-            '^10.0|^11.0|^12.0|^13.0',
+            '^12.0|^13.0',
             $this->composerRequire()['illuminate/database'] ?? null,
         );
     }
@@ -27,7 +27,7 @@ final class ComposerDependencyTest extends TestCase
     public function test_composer_requires_illuminate_filesystem(): void
     {
         $this->assertSame(
-            '^10.0|^11.0|^12.0|^13.0',
+            '^12.0|^13.0',
             $this->composerRequire()['illuminate/filesystem'] ?? null,
         );
     }
