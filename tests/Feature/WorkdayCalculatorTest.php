@@ -135,6 +135,20 @@ final class WorkdayCalculatorTest extends TestCase
         $this->assertSame('2025-02-14', $adapter->hijriDateToGregorian(1446, 8, 15)->toDateString());
     }
 
+    public function test_iran_preset_config_contains_expected_defaults(): void
+    {
+        $config = $this->iranPresetConfig();
+
+        $this->assertSame('iran', $config['default_profile']);
+        $this->assertSame(['Thursday', 'Friday'], $config['profiles']['iran']['weekends']);
+        $this->assertSame('Nowruz', $config['profiles']['iran']['holidays']['jalali']['01-01']);
+        $this->assertSame('Oil Nationalization Day', $config['profiles']['iran']['holidays']['jalali']['12-29']);
+        $this->assertSame("Tasu'a", $config['profiles']['iran']['holidays']['hijri']['01-09']);
+        $this->assertSame('Eid al-Fitr', $config['profiles']['iran']['holidays']['hijri']['10-01']);
+        $this->assertSame([], $config['profiles']['iran']['custom_holidays']);
+        $this->assertSame([], $config['profiles']['iran']['extra_working_days']);
+    }
+
     public function test_is_holiday_returns_true_for_recurring_gregorian_holiday(): void
     {
         $calculator = Workday::profile('global');
@@ -213,6 +227,57 @@ final class WorkdayCalculatorTest extends TestCase
         $result = Workday::profile('global')->addBusinessDays($date->subDay(), 1);
 
         $this->assertSame('2025-02-17', $result->toDateString());
+    }
+
+    public function test_iran_preset_detects_jalali_nowruz_as_holiday(): void
+    {
+        config()->set('workdays', $this->iranPresetConfig());
+
+        $date = (new JalaliCalendarAdapter())->jalaliDateToGregorian(1405, 1, 1);
+        $calculator = Workday::profile('iran');
+
+        $this->assertTrue($calculator->isJalaliHoliday($date));
+        $this->assertTrue($calculator->isHoliday($date));
+        $this->assertFalse($calculator->isBusinessDay($date));
+    }
+
+    public function test_iran_preset_detects_hijri_holiday(): void
+    {
+        config()->set('workdays', $this->iranPresetConfig());
+
+        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 10, 1);
+        $calculator = Workday::profile('iran');
+
+        $this->assertTrue($calculator->isHijriHoliday($date));
+        $this->assertTrue($calculator->isCalendarHoliday($date));
+        $this->assertTrue($calculator->isHoliday($date));
+    }
+
+    public function test_iran_preset_add_business_days_skips_jalali_holiday(): void
+    {
+        config()->set('workdays', $this->iranPresetConfig());
+
+        $start = (new JalaliCalendarAdapter())->jalaliDateToGregorian(1405, 1, 1)->subDay();
+        $expected = (new JalaliCalendarAdapter())->jalaliDateToGregorian(1405, 1, 5);
+
+        $result = Workday::profile('iran')->addBusinessDays($start, 1);
+
+        $this->assertSame($expected->toDateString(), $result->toDateString());
+    }
+
+    public function test_iran_preset_add_business_days_skips_hijri_holiday(): void
+    {
+        config()->set('workdays', $this->iranPresetConfig());
+
+        $holidayDate = $this->nonWeekendIranPresetHijriHoliday();
+        $calculator = Workday::profile('iran');
+
+        $this->assertTrue($calculator->isHijriHoliday($holidayDate));
+        $this->assertFalse($calculator->isWeekend($holidayDate));
+
+        $result = $calculator->addBusinessDays($holidayDate->subDay(), 1);
+
+        $this->assertTrue($result->greaterThan($holidayDate));
     }
 
     public function test_gregorian_holiday_still_works_after_jalali_support(): void
@@ -537,6 +602,15 @@ final class WorkdayCalculatorTest extends TestCase
         $this->assertSame('2026-06-28', $result->toDateString());
     }
 
+    public function test_existing_global_profile_still_works_with_iran_preset_available(): void
+    {
+        config()->set('workdays', $this->iranPresetConfig());
+
+        $result = Workday::profile('global')->addBusinessDays('2026-06-26', 1);
+
+        $this->assertSame('2026-06-29', $result->toDateString());
+    }
+
     public function test_invalid_profile_throws_exception(): void
     {
         $this->expectException(InvalidArgumentException::class);
@@ -700,5 +774,38 @@ final class WorkdayCalculatorTest extends TestCase
         $config['profiles'][$profile] = array_replace_recursive($config['profiles'][$profile], $overrides);
 
         config()->set('workdays', $config);
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function iranPresetConfig(): array
+    {
+        return require dirname(__DIR__, 2) . DIRECTORY_SEPARATOR . 'config' . DIRECTORY_SEPARATOR . 'workdays-iran.php';
+    }
+
+    private function nonWeekendIranPresetHijriHoliday(): \Carbon\CarbonImmutable
+    {
+        $adapter = new HijriCalendarAdapter();
+        $holidays = [
+            [1, 9],
+            [1, 10],
+            [2, 20],
+            [8, 15],
+            [10, 1],
+            [12, 10],
+        ];
+
+        foreach (range(1446, 1450) as $year) {
+            foreach ($holidays as [$month, $day]) {
+                $date = $adapter->hijriDateToGregorian($year, $month, $day);
+
+                if (! in_array($date->isoWeekday(), [4, 5], true)) {
+                    return $date;
+                }
+            }
+        }
+
+        $this->fail('Unable to find a non-weekend Hijri preset holiday for the test range.');
     }
 }

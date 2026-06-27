@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Zarbinco\LaravelWorkdays;
 
 use Illuminate\Support\ServiceProvider;
+use Zarbinco\LaravelWorkdays\Commands\InstallCommand;
 
 final class WorkdaysServiceProvider extends ServiceProvider
 {
@@ -21,5 +22,15 @@ final class WorkdaysServiceProvider extends ServiceProvider
         $this->publishes([
             __DIR__ . '/../config/workdays.php' => config_path('workdays.php'),
         ], 'workdays-config');
+
+        $this->publishes([
+            __DIR__ . '/../config/workdays-iran.php' => config_path('workdays.php'),
+        ], 'workdays-config-iran');
+
+        if ($this->app->runningInConsole()) {
+            $this->commands([
+                InstallCommand::class,
+            ]);
+        }
     }
 }
