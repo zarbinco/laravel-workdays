@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 
 use InvalidArgumentException;
+use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
@@ -110,12 +111,28 @@ final class WorkdayCalculatorTest extends TestCase
         $this->assertIsArray(config('workdays.profiles.global.holidays.jalali'));
     }
 
+    public function test_config_accepts_hijri_holiday_section(): void
+    {
+        $this->assertIsArray(config('workdays.profiles.iran.holidays.hijri'));
+        $this->assertIsArray(config('workdays.profiles.global.holidays.hijri'));
+        $this->assertSame('umm_al_qura', config('workdays.hijri.method'));
+        $this->assertSame(0, config('workdays.hijri.adjustment'));
+    }
+
     public function test_jalali_calendar_adapter_converts_between_gregorian_and_jalali(): void
     {
         $adapter = new JalaliCalendarAdapter();
 
         $this->assertSame('04-01', $adapter->monthDayFromGregorian(DateNormalizer::toImmutable('2026-06-22')));
         $this->assertSame('2026-06-22', $adapter->jalaliDateToGregorian(1405, 4, 1)->toDateString());
+    }
+
+    public function test_hijri_calendar_adapter_converts_between_gregorian_and_hijri(): void
+    {
+        $adapter = new HijriCalendarAdapter();
+
+        $this->assertSame('08-15', $adapter->monthDayFromGregorian(DateNormalizer::toImmutable('2025-02-14')));
+        $this->assertSame('2025-02-14', $adapter->hijriDateToGregorian(1446, 8, 15)->toDateString());
     }
 
     public function test_is_holiday_returns_true_for_recurring_gregorian_holiday(): void
@@ -161,6 +178,43 @@ final class WorkdayCalculatorTest extends TestCase
         $this->assertSame('2026-06-23', $result->toDateString());
     }
 
+    public function test_hijri_recurring_holiday_is_detected(): void
+    {
+        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15)->toDateString();
+
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => [
+                    '08-15' => 'Example Hijri Holiday',
+                ],
+            ],
+        ]);
+
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isHijriHoliday($date));
+        $this->assertTrue($calculator->isCalendarHoliday($date));
+        $this->assertTrue($calculator->isHoliday($date));
+        $this->assertFalse($calculator->isBusinessDay($date));
+    }
+
+    public function test_hijri_recurring_holiday_is_skipped_by_add_business_days(): void
+    {
+        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15);
+
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => [
+                    '08-15' => 'Example Hijri Holiday',
+                ],
+            ],
+        ]);
+
+        $result = Workday::profile('global')->addBusinessDays($date->subDay(), 1);
+
+        $this->assertSame('2025-02-17', $result->toDateString());
+    }
+
     public function test_gregorian_holiday_still_works_after_jalali_support(): void
     {
         $calculator = Workday::profile('global');
@@ -202,12 +256,48 @@ final class WorkdayCalculatorTest extends TestCase
         $this->assertFalse($calculator->isJalaliHoliday('2026-12-25'));
     }
 
-    public function test_is_calendar_holiday_returns_true_for_gregorian_or_jalali_recurring_holidays(): void
+    public function test_is_hijri_holiday_returns_false_for_gregorian_only_holiday(): void
     {
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isGregorianHoliday('2026-12-25'));
+        $this->assertFalse($calculator->isHijriHoliday('2026-12-25'));
+    }
+
+    public function test_gregorian_and_jalali_predicates_remain_unchanged_with_hijri_support(): void
+    {
+        $hijriDate = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15)->toDateString();
+
         $this->setProfileConfig('global', [
             'holidays' => [
                 'jalali' => [
                     '04-01' => 'Example Jalali Holiday',
+                ],
+                'hijri' => [
+                    '08-15' => 'Example Hijri Holiday',
+                ],
+            ],
+        ]);
+
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isGregorianHoliday('2026-12-25'));
+        $this->assertTrue($calculator->isJalaliHoliday('2026-06-22'));
+        $this->assertFalse($calculator->isGregorianHoliday($hijriDate));
+        $this->assertFalse($calculator->isJalaliHoliday($hijriDate));
+    }
+
+    public function test_is_calendar_holiday_returns_true_for_gregorian_jalali_or_hijri_recurring_holidays(): void
+    {
+        $hijriDate = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15)->toDateString();
+
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'jalali' => [
+                    '04-01' => 'Example Jalali Holiday',
+                ],
+                'hijri' => [
+                    '08-15' => 'Example Hijri Holiday',
                 ],
             ],
         ]);
@@ -216,6 +306,7 @@ final class WorkdayCalculatorTest extends TestCase
 
         $this->assertTrue($calculator->isCalendarHoliday('2026-12-25'));
         $this->assertTrue($calculator->isCalendarHoliday('2026-06-22'));
+        $this->assertTrue($calculator->isCalendarHoliday($hijriDate));
     }
 
     public function test_is_calendar_holiday_does_not_include_custom_holidays(): void
@@ -322,6 +413,29 @@ final class WorkdayCalculatorTest extends TestCase
         $this->assertTrue($calculator->isCalendarHoliday('2026-06-22'));
         $this->assertTrue($calculator->isBusinessDay('2026-06-22'));
         $this->assertFalse($calculator->isHoliday('2026-06-22'));
+    }
+
+    public function test_extra_working_day_overrides_hijri_holiday(): void
+    {
+        $date = (new HijriCalendarAdapter())->hijriDateToGregorian(1446, 8, 15)->toDateString();
+
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => [
+                    '08-15' => 'Example Hijri Holiday',
+                ],
+            ],
+            'extra_working_days' => [
+                $date => 'Compensation working day',
+            ],
+        ]);
+
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isHijriHoliday($date));
+        $this->assertTrue($calculator->isCalendarHoliday($date));
+        $this->assertTrue($calculator->isBusinessDay($date));
+        $this->assertFalse($calculator->isHoliday($date));
     }
 
     public function test_is_non_working_day_aliases_is_holiday(): void
@@ -494,6 +608,87 @@ final class WorkdayCalculatorTest extends TestCase
         $this->expectExceptionMessage('Invalid gregorian recurring holiday key [13-01]');
 
         Workday::profile('global');
+    }
+
+    public function test_invalid_hijri_month_key_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => [
+                    '13-01' => 'Invalid holiday',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid hijri recurring holiday key [13-01]');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_hijri_day_key_throws_exception(): void
+    {
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => [
+                    '01-31' => 'Invalid holiday',
+                ],
+            ],
+        ]);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid hijri recurring holiday key [01-31]');
+
+        Workday::profile('global');
+    }
+
+    public function test_invalid_hijri_method_throws_exception(): void
+    {
+        config()->set('workdays.hijri.method', 'observatory');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Invalid Hijri calculation method [observatory]');
+
+        Workday::profile('global');
+    }
+
+    public function test_non_integer_hijri_adjustment_throws_exception(): void
+    {
+        config()->set('workdays.hijri.adjustment', '1');
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('The workdays hijri.adjustment config value must be an integer.');
+
+        Workday::profile('global');
+    }
+
+    public function test_non_zero_hijri_adjustment_with_umm_al_qura_throws_exception(): void
+    {
+        config()->set('workdays.hijri.adjustment', 1);
+
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('Non-zero Hijri adjustment is only supported with the mathematical method.');
+
+        Workday::profile('global');
+    }
+
+    public function test_mathematical_hijri_method_with_adjustment_works(): void
+    {
+        config()->set('workdays.hijri.method', 'mathematical');
+        config()->set('workdays.hijri.adjustment', 1);
+
+        $this->setProfileConfig('global', [
+            'holidays' => [
+                'hijri' => [
+                    '08-16' => 'Adjusted Hijri Holiday',
+                ],
+            ],
+        ]);
+
+        $calculator = Workday::profile('global');
+
+        $this->assertTrue($calculator->isHijriHoliday('2025-02-14'));
+        $this->assertTrue($calculator->isCalendarHoliday('2025-02-14'));
     }
 
     /**

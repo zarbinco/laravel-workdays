@@ -7,6 +7,7 @@ namespace Zarbinco\LaravelWorkdays\Calculator;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 use InvalidArgumentException;
+use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
 use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
@@ -21,6 +22,8 @@ final class BusinessDayCalculator
 
     private readonly JalaliCalendarAdapter $jalaliCalendar;
 
+    private readonly HijriCalendarAdapter $hijriCalendar;
+
     /**
      * @param array<string, mixed> $profileConfig
      */
@@ -29,8 +32,10 @@ final class BusinessDayCalculator
         private readonly array $profileConfig,
         private readonly bool $includeStartDate = false,
         ?JalaliCalendarAdapter $jalaliCalendar = null,
+        ?HijriCalendarAdapter $hijriCalendar = null,
     ) {
         $this->jalaliCalendar = $jalaliCalendar ?? new JalaliCalendarAdapter();
+        $this->hijriCalendar = $hijriCalendar ?? new HijriCalendarAdapter();
 
         $weekends = $profileConfig['weekends'] ?? [];
 
@@ -91,6 +96,11 @@ final class BusinessDayCalculator
     public function isJalaliHoliday(string|DateTimeInterface $date): bool
     {
         return $this->matchesRecurringJalaliHoliday(DateNormalizer::toImmutable($date));
+    }
+
+    public function isHijriHoliday(string|DateTimeInterface $date): bool
+    {
+        return $this->matchesRecurringHijriHoliday(DateNormalizer::toImmutable($date));
     }
 
     public function isCustomHoliday(string|DateTimeInterface $date): bool
@@ -196,16 +206,31 @@ final class BusinessDayCalculator
 
     private function matchesRecurringJalaliHoliday(CarbonImmutable $date): bool
     {
-        return array_key_exists(
-            $this->jalaliCalendar->monthDayFromGregorian($date),
-            $this->recurringJalaliHolidays(),
-        );
+        $jalaliHolidays = $this->recurringJalaliHolidays();
+
+        if ($jalaliHolidays === []) {
+            return false;
+        }
+
+        return array_key_exists($this->jalaliCalendar->monthDayFromGregorian($date), $jalaliHolidays);
+    }
+
+    private function matchesRecurringHijriHoliday(CarbonImmutable $date): bool
+    {
+        $hijriHolidays = $this->recurringHijriHolidays();
+
+        if ($hijriHolidays === []) {
+            return false;
+        }
+
+        return array_key_exists($this->hijriCalendar->monthDayFromGregorian($date), $hijriHolidays);
     }
 
     private function matchesCalendarHoliday(CarbonImmutable $date): bool
     {
         return $this->matchesRecurringGregorianHoliday($date)
-            || $this->matchesRecurringJalaliHoliday($date);
+            || $this->matchesRecurringJalaliHoliday($date)
+            || $this->matchesRecurringHijriHoliday($date);
     }
 
     /**
@@ -222,6 +247,14 @@ final class BusinessDayCalculator
     private function recurringJalaliHolidays(): array
     {
         return $this->recurringHolidays('jalali');
+    }
+
+    /**
+     * @return array<string, mixed>
+     */
+    private function recurringHijriHolidays(): array
+    {
+        return $this->recurringHolidays('hijri');
     }
 
     /**
@@ -289,6 +322,17 @@ final class BusinessDayCalculator
             }
 
             HolidayKeyValidator::validateJalali($key, $this->profile);
+        }
+
+        foreach (array_keys($this->recurringHijriHolidays()) as $key) {
+            if (! is_string($key)) {
+                throw new InvalidArgumentException(sprintf(
+                    'Invalid hijri recurring holiday key for profile [%s]. Expected a valid MM-DD string.',
+                    $this->profile,
+                ));
+            }
+
+            HolidayKeyValidator::validateHijri($key, $this->profile);
         }
     }
 

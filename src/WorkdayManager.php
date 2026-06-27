@@ -7,6 +7,7 @@ namespace Zarbinco\LaravelWorkdays;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 use InvalidArgumentException;
+use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
 
@@ -24,6 +25,7 @@ final class WorkdayManager
             profile: $profile,
             profileConfig: $profiles[$profile],
             includeStartDate: $this->includeStartDate(),
+            hijriCalendar: HijriCalendarAdapter::fromConfig(),
         );
     }
 
@@ -60,6 +62,11 @@ final class WorkdayManager
     public function isJalaliHoliday(string|DateTimeInterface $date): bool
     {
         return $this->defaultCalculator()->isJalaliHoliday($date);
+    }
+
+    public function isHijriHoliday(string|DateTimeInterface $date): bool
+    {
+        return $this->defaultCalculator()->isHijriHoliday($date);
     }
 
     public function isCustomHoliday(string|DateTimeInterface $date): bool

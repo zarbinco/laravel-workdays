@@ -44,6 +44,24 @@ final class HolidayKeyValidator
         12 => 30,
     ];
 
+    /**
+     * @var array<int, int>
+     */
+    private const HIJRI_DAYS_IN_MONTH = [
+        1 => 30,
+        2 => 30,
+        3 => 30,
+        4 => 30,
+        5 => 30,
+        6 => 30,
+        7 => 30,
+        8 => 30,
+        9 => 30,
+        10 => 30,
+        11 => 30,
+        12 => 30,
+    ];
+
     public static function validateGregorian(string $key, string $profile): void
     {
         self::validate($key, $profile, 'Gregorian', self::GREGORIAN_DAYS_IN_MONTH);
@@ -52,6 +70,11 @@ final class HolidayKeyValidator
     public static function validateJalali(string $key, string $profile): void
     {
         self::validate($key, $profile, 'Jalali', self::JALALI_DAYS_IN_MONTH);
+    }
+
+    public static function validateHijri(string $key, string $profile): void
+    {
+        self::validate($key, $profile, 'Hijri', self::HIJRI_DAYS_IN_MONTH);
     }
 
     /**
