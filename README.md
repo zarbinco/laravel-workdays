@@ -22,7 +22,7 @@ It answers questions like "is this date a business day?", "what is the next busi
 ## What This Package Is Not
 
 - It is not a general calendar package.
-- It does not generate official year-by-year government calendars.
+- It does not generate official year-by-year government calendars automatically.
 - It does not include admin UI, routes, controllers, or views.
 - It does not call external APIs or update holidays online.
 - It does not guarantee that the Iran preset matches every official bridge holiday or government decision.
@@ -254,6 +254,46 @@ The preset includes:
 - A global Saturday/Sunday profile with New Year and Christmas.
 
 The Iran preset is useful, but it is not an exact official calendar generator. Government bridge holidays and one-off official decisions are not generated automatically. Add exact Gregorian dates to `custom_holidays` or `extra_working_days` when you need official, company, or government overrides.
+
+## Official Iran Yearly Calendars
+
+The config-based `iran` preset remains recurring and lightweight. Official yearly calendar datasets are opt-in static files for exact Jalali years and do not silently replace your config.
+
+Currently supported official yearly dataset:
+
+- Iran 1405, sourced from the University of Tehran Calendar Center official calendar PDF.
+
+Publish and run the package migrations before importing a yearly dataset:
+
+```bash
+php artisan vendor:publish --tag=workdays-migrations
+php artisan migrate
+```
+
+Preview the import without writing records:
+
+```bash
+php artisan workdays:import-iran-calendar 1405 --dry-run
+```
+
+Import into the default `iran` profile, or choose a separate profile:
+
+```bash
+php artisan workdays:import-iran-calendar 1405
+php artisan workdays:import-iran-calendar 1405 --profile=iran-official-1405
+```
+
+The command writes exact Gregorian `holiday` rows to `workday_special_dates`. It is idempotent, skips existing profile/date titles by default, and only overwrites them with `--force`.
+
+Use database or chain storage to calculate with imported dates. The default `iran` profile already exists; custom profile names such as `iran-official-1405` must also be configured before calling `Workday::profile(...)`.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$info = Workday::profile('iran-official-1405')->explain('2026-03-21');
+```
+
+Future years can be added as separate dataset files. Emergency closures or later government changes are not updated automatically; add manual special dates when official changes occur after a dataset is published.
 
 ## Database Storage Mode
 

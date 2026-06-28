@@ -4,6 +4,10 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added opt-in Iran official yearly calendar dataset support.
+- Added the Iran 1405 official holiday dataset sourced from the University of Tehran Calendar Center official calendar.
+- Added `workdays:import-iran-calendar` with dry-run, idempotent import, profile override, and force-update support.
+- Added README documentation and tests for official Iran yearly datasets and import behavior.
 - Added `DayInfo` and `DayReason` value objects for date explainability.
 - Added `explain()` on the facade/default profile and profile calculators.
 - Added reason reporting for weekends, recurring Gregorian/Jalali/Hijri holidays, custom holidays, and extra working days.

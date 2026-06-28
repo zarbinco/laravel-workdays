@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Zarbinco\LaravelWorkdays;
 
 use Illuminate\Support\ServiceProvider;
+use Zarbinco\LaravelWorkdays\Commands\ImportIranCalendarCommand;
 use Zarbinco\LaravelWorkdays\Commands\InstallCommand;
 
 final class WorkdaysServiceProvider extends ServiceProvider
@@ -41,6 +42,7 @@ final class WorkdaysServiceProvider extends ServiceProvider
 
         if ($this->app->runningInConsole()) {
             $this->commands([
+                ImportIranCalendarCommand::class,
                 InstallCommand::class,
             ]);
         }
