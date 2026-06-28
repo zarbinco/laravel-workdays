@@ -42,6 +42,12 @@ return [
         'override_existing' => false,
     ],
 
+    'iran_official' => [
+        'enabled' => false,
+        'year' => null,
+        'profile' => null,
+    ],
+
     'profiles' => [
         'iran' => [
             'weekends' => ['Thursday', 'Friday'],

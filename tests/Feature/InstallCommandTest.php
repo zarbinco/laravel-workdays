@@ -84,6 +84,7 @@ final class InstallCommandTest extends TestCase
         $this->assertSame('config', $config['storage']['driver']);
         $this->assertArrayHasKey('iran', $config['profiles']);
         $this->assertSame([], $config['profiles']['iran']['holidays']['jalali']);
+        $this->assertSame(['enabled' => false, 'year' => null, 'profile' => null], $config['iran_official']);
     }
 
     public function test_install_command_publishes_iran_config(): void
@@ -97,6 +98,22 @@ final class InstallCommandTest extends TestCase
         $this->assertStringContainsString('Laravel Workdays Iran preset config was installed.', Artisan::output());
         $this->assertSame('Nowruz', $config['profiles']['iran']['holidays']['jalali']['01-01']);
         $this->assertSame('Eid al-Fitr', $config['profiles']['iran']['holidays']['hijri']['10-01']);
+        $this->assertSame(['enabled' => false, 'year' => null, 'profile' => null], $config['iran_official']);
+    }
+
+    public function test_install_command_does_not_import_1405_calendar_by_default(): void
+    {
+        $this->fakePublishDestination();
+
+        $exitCode = Artisan::call('workdays:install');
+        $output = Artisan::output();
+        $config = require $this->publishPath;
+
+        $this->assertSame(0, $exitCode);
+        $this->assertStringNotContainsString('import-iran-calendar', $output);
+        $this->assertStringNotContainsString('1405 import', $output);
+        $this->assertSame(['enabled' => false, 'year' => null, 'profile' => null], $config['iran_official']);
+        $this->assertSame([], $this->migrationFiles('create_workday_special_dates_table'));
     }
 
     public function test_persian_option_publishes_iran_config(): void

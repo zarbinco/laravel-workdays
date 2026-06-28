@@ -6,6 +6,7 @@ namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 
 use InvalidArgumentException;
 use RuntimeException;
+use Zarbinco\LaravelWorkdays\Calendars\IranOfficialCalendar;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
@@ -21,6 +22,48 @@ final class ReleaseReadinessTest extends TestCase
         $config = require dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays-iran.php';
 
         $this->assertSame(3660, $config['max_scan_days']);
+    }
+
+    public function test_iran_official_calendar_is_disabled_by_default(): void
+    {
+        $this->assertSame([
+            'enabled' => false,
+            'year' => null,
+            'profile' => null,
+        ], config('workdays.iran_official'));
+    }
+
+    public function test_default_config_does_not_select_1405_official_year(): void
+    {
+        $defaultConfig = require dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays.php';
+        $iranConfig = require dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'config'.DIRECTORY_SEPARATOR.'workdays-iran.php';
+
+        $this->assertFalse($defaultConfig['iran_official']['enabled']);
+        $this->assertNull($defaultConfig['iran_official']['year']);
+        $this->assertNull($defaultConfig['iran_official']['profile']);
+        $this->assertFalse($iranConfig['iran_official']['enabled']);
+        $this->assertNull($iranConfig['iran_official']['year']);
+        $this->assertNull($iranConfig['iran_official']['profile']);
+    }
+
+    public function test_default_iran_profile_does_not_auto_load_1405_dataset(): void
+    {
+        $calculator = Workday::profile('iran');
+
+        $this->assertTrue((new IranOfficialCalendar)->hasYear(1405));
+        $this->assertTrue($calculator->isBusinessDay('2026-04-14'));
+        $this->assertFalse($calculator->isCalendarHoliday('2026-04-14'));
+        $this->assertFalse($calculator->isCustomHoliday('2026-04-14'));
+    }
+
+    public function test_1405_dataset_is_available_but_opt_in(): void
+    {
+        $calendar = new IranOfficialCalendar;
+
+        $this->assertTrue($calendar->hasYear(1405));
+        $this->assertContains(1405, $calendar->availableYears());
+        $this->assertFalse(config('workdays.iran_official.enabled'));
+        $this->assertNull(config('workdays.iran_official.year'));
     }
 
     public function test_max_scan_days_must_be_positive_integer(): void

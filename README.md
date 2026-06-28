@@ -259,9 +259,21 @@ The Iran preset is useful, but it is not an exact official calendar generator. G
 
 The config-based `iran` preset remains recurring and lightweight. Official yearly calendar datasets are opt-in static files for exact Jalali years and do not silently replace your config.
 
+Official yearly calendars are disabled by default:
+
+```php
+'iran_official' => [
+    'enabled' => false,
+    'year' => null,
+    'profile' => null,
+],
+```
+
+The package does not import, seed, or activate Iran 1405 automatically. The dataset only affects calculations after you explicitly import it into database storage.
+
 Currently supported official yearly dataset:
 
-- Iran 1405, sourced from the University of Tehran Calendar Center official calendar PDF.
+- Iran 1405, sourced from the University of Tehran Calendar Center official calendar PDF, available as an optional resource.
 
 Publish and run the package migrations before importing a yearly dataset:
 
@@ -283,7 +295,7 @@ php artisan workdays:import-iran-calendar 1405
 php artisan workdays:import-iran-calendar 1405 --profile=iran-official-1405
 ```
 
-The command writes exact Gregorian `holiday` rows to `workday_special_dates`. It is idempotent, skips existing profile/date titles by default, and only overwrites them with `--force`.
+The command writes exact Gregorian `holiday` rows to `workday_special_dates`. It is idempotent, skips existing profile/date titles by default, and only overwrites them with `--force`. The installer never runs this command for you.
 
 Use database or chain storage to calculate with imported dates. The default `iran` profile already exists; custom profile names such as `iran-official-1405` must also be configured before calling `Workday::profile(...)`.
 
@@ -652,6 +664,11 @@ return [
         'enabled' => true,
         'short_aliases' => true,
         'override_existing' => false,
+    ],
+    'iran_official' => [
+        'enabled' => false,
+        'year' => null,
+        'profile' => null,
     ],
     'profiles' => [
         'profile-name' => [
