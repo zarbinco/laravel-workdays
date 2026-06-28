@@ -11,6 +11,7 @@ use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
+use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
@@ -93,6 +94,49 @@ final class WorkdayManager
     public function isExtraWorkingDay(string|DateTimeInterface $date): bool
     {
         return $this->defaultCalculator()->isExtraWorkingDay($date);
+    }
+
+    public function isBusinessTime(string|DateTimeInterface $datetime): bool
+    {
+        return $this->defaultCalculator()->isBusinessTime($datetime);
+    }
+
+    /**
+     * @return array<int, TimeWindow>
+     */
+    public function workingWindowsFor(string|DateTimeInterface $date): array
+    {
+        return $this->defaultCalculator()->workingWindowsFor($date);
+    }
+
+    public function nextBusinessTime(string|DateTimeInterface $datetime): CarbonImmutable
+    {
+        return $this->defaultCalculator()->nextBusinessTime($datetime);
+    }
+
+    public function previousBusinessTime(string|DateTimeInterface $datetime): CarbonImmutable
+    {
+        return $this->defaultCalculator()->previousBusinessTime($datetime);
+    }
+
+    public function addBusinessMinutes(string|DateTimeInterface $datetime, int $minutes): CarbonImmutable
+    {
+        return $this->defaultCalculator()->addBusinessMinutes($datetime, $minutes);
+    }
+
+    public function addBusinessHours(string|DateTimeInterface $datetime, int|float $hours): CarbonImmutable
+    {
+        return $this->defaultCalculator()->addBusinessHours($datetime, $hours);
+    }
+
+    public function diffBusinessMinutes(string|DateTimeInterface $startDate, string|DateTimeInterface $endDate): int
+    {
+        return $this->defaultCalculator()->diffBusinessMinutes($startDate, $endDate);
+    }
+
+    public function diffBusinessHours(string|DateTimeInterface $startDate, string|DateTimeInterface $endDate): float
+    {
+        return $this->defaultCalculator()->diffBusinessHours($startDate, $endDate);
     }
 
     public function addBusinessDays(string|DateTimeInterface $date, int $days): CarbonImmutable

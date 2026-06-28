@@ -12,11 +12,14 @@ use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Data\DayReason;
+use Zarbinco\LaravelWorkdays\Data\TimeWindow;
+use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
 use Zarbinco\LaravelWorkdays\Support\WeekdayNormalizer;
+use Zarbinco\LaravelWorkdays\Support\WorkingHours;
 
 final class BusinessDayCalculator
 {
@@ -30,6 +33,8 @@ final class BusinessDayCalculator
     private readonly HijriCalendarAdapter $hijriCalendar;
 
     private readonly HolidayProviderInterface $holidayProvider;
+
+    private ?WorkingHours $workingHours = null;
 
     /**
      * @param  array<string, mixed>  $profileConfig
@@ -114,6 +119,205 @@ final class BusinessDayCalculator
     public function isExtraWorkingDay(string|DateTimeInterface $date): bool
     {
         return $this->matchesExtraWorkingDay(DateNormalizer::toImmutable($date));
+    }
+
+    public function isBusinessTime(string|DateTimeInterface $datetime): bool
+    {
+        $datetime = $this->toDateTime($datetime);
+
+        foreach ($this->workingWindowsFor($datetime) as $window) {
+            $start = $this->windowStart($datetime, $window);
+            $end = $this->windowEnd($datetime, $window);
+
+            if ($datetime->greaterThanOrEqualTo($start) && $datetime->lessThan($end)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /**
+     * @return array<int, TimeWindow>
+     */
+    public function workingWindowsFor(string|DateTimeInterface $date): array
+    {
+        $date = $this->toDateTime($date);
+        $workingHours = $this->workingHours();
+        $isExtraWorkingDay = $this->matchesExtraWorkingDay($date);
+
+        if (! $this->isBusinessDate($date)) {
+            return [];
+        }
+
+        $windows = $workingHours->windowsForIsoWeekday($date->isoWeekday());
+
+        if ($windows !== [] || ! $isExtraWorkingDay) {
+            return $windows;
+        }
+
+        $fallbackWindows = $workingHours->extraWorkingDayWindows();
+
+        if ($fallbackWindows !== []) {
+            return $fallbackWindows;
+        }
+
+        throw new WorkdayConfigurationException($workingHours->missingExtraWorkingDayHoursMessage());
+    }
+
+    public function nextBusinessTime(string|DateTimeInterface $datetime): CarbonImmutable
+    {
+        $datetime = $this->toDateTime($datetime);
+
+        if ($this->isBusinessTime($datetime)) {
+            return $datetime;
+        }
+
+        $date = $datetime->startOfDay();
+
+        for ($scannedDays = 0; $scannedDays <= $this->maxScanDays; $scannedDays++) {
+            foreach ($this->workingWindowsFor($date) as $window) {
+                $start = $this->windowStart($date, $window);
+                $end = $this->windowEnd($date, $window);
+
+                if ($scannedDays > 0 || $datetime->lessThanOrEqualTo($start)) {
+                    return $start;
+                }
+
+                if ($datetime->lessThan($end)) {
+                    return $datetime;
+                }
+            }
+
+            $date = $date->addDay();
+        }
+
+        $this->throwUnableToResolveBusinessTime();
+    }
+
+    public function previousBusinessTime(string|DateTimeInterface $datetime): CarbonImmutable
+    {
+        $datetime = $this->toDateTime($datetime);
+
+        if ($this->isBusinessTime($datetime)) {
+            return $datetime;
+        }
+
+        $date = $datetime->startOfDay();
+
+        for ($scannedDays = 0; $scannedDays <= $this->maxScanDays; $scannedDays++) {
+            $windows = array_reverse($this->workingWindowsFor($date));
+
+            foreach ($windows as $window) {
+                $start = $this->windowStart($date, $window);
+                $end = $this->windowEnd($date, $window);
+
+                if ($scannedDays > 0 || $datetime->greaterThanOrEqualTo($end)) {
+                    return $end->subSecond();
+                }
+
+                if ($datetime->greaterThan($start)) {
+                    return $datetime;
+                }
+            }
+
+            $date = $date->subDay();
+        }
+
+        $this->throwUnableToResolveBusinessTime();
+    }
+
+    public function addBusinessMinutes(string|DateTimeInterface $datetime, int $minutes): CarbonImmutable
+    {
+        $this->workingHours();
+
+        if ($minutes < 0) {
+            throw new InvalidArgumentException('Business minutes must be zero or greater.');
+        }
+
+        $datetime = $this->toDateTime($datetime);
+
+        if ($minutes === 0) {
+            return $datetime;
+        }
+
+        $current = $this->isBusinessTime($datetime) ? $datetime : $this->nextBusinessTime($datetime);
+        $remainingMinutes = $minutes;
+
+        while ($remainingMinutes > 0) {
+            $windowEnd = $this->currentWindowEnd($current);
+            $availableMinutes = $this->diffWholeMinutes($current, $windowEnd);
+
+            if ($availableMinutes >= $remainingMinutes) {
+                return $current->addMinutes($remainingMinutes);
+            }
+
+            if ($availableMinutes > 0) {
+                $remainingMinutes -= $availableMinutes;
+            }
+
+            $current = $this->nextBusinessTime($windowEnd);
+        }
+
+        return $current;
+    }
+
+    public function addBusinessHours(string|DateTimeInterface $datetime, int|float $hours): CarbonImmutable
+    {
+        if ($hours < 0) {
+            throw new InvalidArgumentException('Business hours must be zero or greater.');
+        }
+
+        $minutes = $hours * 60;
+        $roundedMinutes = (int) round($minutes);
+
+        if (abs($minutes - $roundedMinutes) > 0.000001) {
+            throw new InvalidArgumentException('Business hours must convert to whole minutes.');
+        }
+
+        return $this->addBusinessMinutes($datetime, $roundedMinutes);
+    }
+
+    public function diffBusinessMinutes(string|DateTimeInterface $start, string|DateTimeInterface $end): int
+    {
+        $this->workingHours();
+
+        $start = $this->toDateTime($start);
+        $end = $this->toDateTime($end);
+
+        if ($start->equalTo($end)) {
+            return 0;
+        }
+
+        if ($start->greaterThan($end)) {
+            return -$this->diffBusinessMinutes($end, $start);
+        }
+
+        $minutes = 0;
+        $date = $start->startOfDay();
+        $lastDate = $end->startOfDay();
+
+        while ($date->lessThanOrEqualTo($lastDate)) {
+            foreach ($this->workingWindowsFor($date) as $window) {
+                $windowStart = $this->windowStart($date, $window);
+                $windowEnd = $this->windowEnd($date, $window);
+                $segmentStart = $start->greaterThan($windowStart) ? $start : $windowStart;
+                $segmentEnd = $end->lessThan($windowEnd) ? $end : $windowEnd;
+
+                if ($segmentEnd->greaterThan($segmentStart)) {
+                    $minutes += $this->diffWholeMinutes($segmentStart, $segmentEnd);
+                }
+            }
+
+            $date = $date->addDay();
+        }
+
+        return $minutes;
+    }
+
+    public function diffBusinessHours(string|DateTimeInterface $start, string|DateTimeInterface $end): float
+    {
+        return $this->diffBusinessMinutes($start, $end) / 60;
     }
 
     public function explain(string|DateTimeInterface $date): DayInfo
@@ -272,6 +476,25 @@ final class BusinessDayCalculator
         return in_array($date->isoWeekday(), $this->weekendDays, true);
     }
 
+    private function toDateTime(string|DateTimeInterface $datetime): CarbonImmutable
+    {
+        if ($datetime instanceof DateTimeInterface) {
+            return CarbonImmutable::instance($datetime);
+        }
+
+        $datetime = trim($datetime);
+
+        if ($datetime === '') {
+            throw new InvalidArgumentException('Date/time cannot be empty. Expected a Gregorian date/time string.');
+        }
+
+        try {
+            return CarbonImmutable::parse($datetime);
+        } catch (\Throwable $exception) {
+            throw new InvalidArgumentException(sprintf('Invalid date/time [%s]. Expected a Gregorian date/time string.', $datetime), previous: $exception);
+        }
+    }
+
     private function isBusinessDate(CarbonImmutable $date): bool
     {
         if ($this->matchesExtraWorkingDay($date)) {
@@ -373,6 +596,40 @@ final class BusinessDayCalculator
         return $this->holidayProvider->hasExtraWorkingDay($this->profile, $date);
     }
 
+    private function workingHours(): WorkingHours
+    {
+        return $this->workingHours ??= WorkingHours::fromProfileConfig($this->profile, $this->profileConfig);
+    }
+
+    private function windowStart(CarbonImmutable $date, TimeWindow $window): CarbonImmutable
+    {
+        return $date->startOfDay()->addMinutes($window->startMinutes());
+    }
+
+    private function windowEnd(CarbonImmutable $date, TimeWindow $window): CarbonImmutable
+    {
+        return $date->startOfDay()->addMinutes($window->endMinutes());
+    }
+
+    private function currentWindowEnd(CarbonImmutable $datetime): CarbonImmutable
+    {
+        foreach ($this->workingWindowsFor($datetime) as $window) {
+            $start = $this->windowStart($datetime, $window);
+            $end = $this->windowEnd($datetime, $window);
+
+            if ($datetime->greaterThanOrEqualTo($start) && $datetime->lessThan($end)) {
+                return $end;
+            }
+        }
+
+        return $this->windowEnd($datetime, $this->workingWindowsFor($datetime)[0]);
+    }
+
+    private function diffWholeMinutes(CarbonImmutable $start, CarbonImmutable $end): int
+    {
+        return intdiv(max(0, $end->getTimestamp() - $start->getTimestamp()), 60);
+    }
+
     private function recurringHolidayReason(
         string $type,
         string $calendar,
@@ -463,6 +720,15 @@ final class BusinessDayCalculator
     {
         throw new RuntimeException(sprintf(
             'Unable to resolve a business day within [%d] calendar days for profile [%s]. Check weekends, holidays, extra working days, and max_scan_days config.',
+            $this->maxScanDays,
+            $this->profile,
+        ));
+    }
+
+    private function throwUnableToResolveBusinessTime(): never
+    {
+        throw new RuntimeException(sprintf(
+            'Unable to resolve a business time within [%d] calendar days for profile [%s]. Check working_hours, holidays, extra working days, and max_scan_days config.',
             $this->maxScanDays,
             $this->profile,
         ));

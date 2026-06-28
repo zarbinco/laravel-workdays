@@ -410,6 +410,64 @@ Extra working days always win:
 - Working day override wins over database holiday.
 - If the same exact date is both `holiday` and `working_day`, `working_day` wins.
 
+## Business Hours And Half-Days
+
+Day-level methods such as `isBusinessDay()`, `addBusinessDays()`, and `explain()` keep their existing behavior. Business-time methods are opt-in and require `working_hours` on the profile you call them from.
+
+Configure one or more working windows per weekday:
+
+```php
+'working_hours' => [
+    'Saturday' => [['09:00', '17:00']],
+    'Sunday' => [['09:00', '17:00']],
+    'Monday' => [['09:00', '17:00']],
+    'Tuesday' => [['09:00', '17:00']],
+    'Wednesday' => [['09:00', '17:00']],
+    'Thursday' => [['09:00', '13:00']],
+    'Friday' => [],
+],
+```
+
+Start times are inclusive and end times are exclusive. For example, `09:00` is business time, but `17:00` is not.
+
+Half-days are just shorter windows. Lunch breaks or split shifts use multiple non-overlapping windows:
+
+```php
+'working_hours' => [
+    'Monday' => [
+        ['09:00', '12:00'],
+        ['13:00', '17:00'],
+    ],
+],
+```
+
+Business-time methods respect weekends, recurring holidays, custom holidays, imported official holidays, and extra working days. Holidays close the date unless that same exact date is an extra working day.
+
+If an extra working day falls on a weekday with no configured windows, you can provide fallback hours:
+
+```php
+'extra_working_day_hours' => [
+    ['09:00', '17:00'],
+],
+```
+
+The fallback is used only for extra working days whose weekday has no `working_hours` windows. Normal closed weekdays stay closed.
+
+```php
+Workday::profile('iran')->isBusinessTime('2026-06-29 10:30');
+Workday::profile('iran')->workingWindowsFor('2026-06-29');
+Workday::profile('iran')->nextBusinessTime('2026-06-29 08:00');
+Workday::profile('iran')->previousBusinessTime('2026-06-29 17:00');
+Workday::profile('iran')->addBusinessHours('2026-06-29 16:00', 2);
+Workday::profile('iran')->diffBusinessMinutes('2026-06-29 09:00', '2026-06-29 17:00');
+```
+
+`previousBusinessTime()` returns the same datetime when it is inside a working window. When the datetime is exactly at a window end, it returns one second before that end, such as `16:59:59` for a `09:00`-`17:00` window.
+
+Business-time calculations use minute precision for add/diff methods. `addBusinessHours()` converts hours to whole minutes, so `1.5` means 90 minutes and values that cannot convert to whole minutes are rejected.
+
+String datetimes are parsed by Carbon using the application/default timezone. `DateTimeInterface` inputs preserve their timezone when converted to `CarbonImmutable`.
+
 ## Public API Reference
 
 ```php
@@ -423,6 +481,14 @@ Workday::profile('global')->isJalaliHoliday($date);
 Workday::profile('global')->isHijriHoliday($date);
 Workday::profile('global')->isCustomHoliday($date);
 Workday::profile('global')->isExtraWorkingDay($date);
+Workday::profile('global')->isBusinessTime($datetime);
+Workday::profile('global')->workingWindowsFor($date);
+Workday::profile('global')->nextBusinessTime($datetime);
+Workday::profile('global')->previousBusinessTime($datetime);
+Workday::profile('global')->addBusinessMinutes($datetime, 90);
+Workday::profile('global')->addBusinessHours($datetime, 1.5);
+Workday::profile('global')->diffBusinessMinutes($startDateTime, $endDateTime);
+Workday::profile('global')->diffBusinessHours($startDateTime, $endDateTime);
 Workday::profile('global')->addBusinessDays($date, 5);
 Workday::profile('global')->subBusinessDays($date, 5);
 Workday::profile('global')->nextBusinessDay($date);
@@ -485,6 +551,12 @@ return [
             ],
             'custom_holidays' => [],
             'extra_working_days' => [],
+            'working_hours' => [
+                'Monday' => [['09:00', '17:00']],
+            ],
+            'extra_working_day_hours' => [
+                ['09:00', '17:00'],
+            ],
         ],
     ],
 ];

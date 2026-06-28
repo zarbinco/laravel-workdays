@@ -32,6 +32,8 @@ final class ProfileConfigValidator
             self::validateExactDates($profile, 'extra_working_days', $profileConfig['extra_working_days']);
         }
 
+        WorkingHours::validateProfileConfig($profile, $profileConfig);
+
         return $profileConfig;
     }
 

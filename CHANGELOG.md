@@ -4,6 +4,10 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added optional `working_hours` profile config for business-time calculations.
+- Added business-time APIs for checking, navigating, adding, and diffing working minutes and hours.
+- Added support for half-days, split working windows, and extra-working-day fallback hours.
+- Added business-hours validation, README examples, and test coverage while preserving existing day-level APIs.
 - Added opt-in Iran official yearly calendar dataset support.
 - Added the Iran 1405 official holiday dataset sourced from the University of Tehran Calendar Center official calendar.
 - Added `workdays:import-iran-calendar` with dry-run, idempotent import, profile override, and force-update support.
