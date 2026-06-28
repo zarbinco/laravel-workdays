@@ -36,6 +36,12 @@ return [
         'adjustment' => 0,
     ],
 
+    'carbon_macros' => [
+        'enabled' => true,
+        'short_aliases' => true,
+        'override_existing' => false,
+    ],
+
     'profiles' => [
         'iran' => [
             'weekends' => ['Thursday', 'Friday'],

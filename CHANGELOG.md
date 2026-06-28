@@ -4,6 +4,10 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added optional Carbon and CarbonImmutable macro registration.
+- Added workday-prefixed Carbon macro methods for day-level, explainability, and business-time APIs.
+- Added optional short Carbon macro aliases with conflict-safe registration.
+- Added README examples and tests for Carbon macro configuration, profile routing, and mutable/immutable return behavior.
 - Added optional `working_hours` profile config for business-time calculations.
 - Added business-time APIs for checking, navigating, adding, and diffing working minutes and hours.
 - Added support for half-days, split working windows, and extra-working-day fallback hours.

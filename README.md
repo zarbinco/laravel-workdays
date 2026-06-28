@@ -468,6 +468,50 @@ Business-time calculations use minute precision for add/diff methods. `addBusine
 
 String datetimes are parsed by Carbon using the application/default timezone. `DateTimeInterface` inputs preserve their timezone when converted to `CarbonImmutable`.
 
+## Carbon Macros
+
+Carbon macros are enabled by default for `Carbon\Carbon`, `Carbon\CarbonImmutable`, and naturally for `Illuminate\Support\Carbon`.
+
+The package always registers workday-prefixed macro names when macros are enabled. These are safest for shared projects:
+
+```php
+use Carbon\CarbonImmutable;
+
+$date = CarbonImmutable::parse('2026-06-29');
+
+$date->workdayIsBusinessDay('iran');
+$date->workdayAddBusinessDays(3, 'iran');
+$date->workdayExplain('iran');
+
+$datetime = CarbonImmutable::parse('2026-06-29 10:30');
+
+$datetime->workdayIsBusinessTime('iran');
+$datetime->workdayAddBusinessHours(2, 'iran');
+$datetime->workdayDiffBusinessMinutesUntil('2026-06-30 12:00', 'iran');
+```
+
+Short aliases are also enabled by default where they do not conflict with native Carbon methods or existing macros:
+
+```php
+$date->isBusinessDay('iran');
+$date->addBusinessDays(3, 'iran');
+$date->explainWorkday('iran');
+```
+
+Disable macros or short aliases in config when another Carbon macro package owns similar names:
+
+```php
+'carbon_macros' => [
+    'enabled' => true,
+    'short_aliases' => false,
+    'override_existing' => false,
+],
+```
+
+By default, existing macros and native Carbon methods are not overridden. `override_existing` allows replacing existing macros, but native Carbon methods are still skipped.
+
+Date-returning macros return a new date instance and do not mutate the original object. `CarbonImmutable` macros return `CarbonImmutable`; mutable `Carbon` and `Illuminate\Support\Carbon` macros return a new instance of the original class where possible.
+
 ## Public API Reference
 
 ```php
@@ -540,6 +584,11 @@ return [
     'hijri' => [
         'method' => 'umm_al_qura',
         'adjustment' => 0,
+    ],
+    'carbon_macros' => [
+        'enabled' => true,
+        'short_aliases' => true,
+        'override_existing' => false,
     ],
     'profiles' => [
         'profile-name' => [

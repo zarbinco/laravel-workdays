@@ -7,6 +7,7 @@ namespace Zarbinco\LaravelWorkdays;
 use Illuminate\Support\ServiceProvider;
 use Zarbinco\LaravelWorkdays\Commands\ImportIranCalendarCommand;
 use Zarbinco\LaravelWorkdays\Commands\InstallCommand;
+use Zarbinco\LaravelWorkdays\Support\CarbonMacroRegistrar;
 
 final class WorkdaysServiceProvider extends ServiceProvider
 {
@@ -20,6 +21,8 @@ final class WorkdaysServiceProvider extends ServiceProvider
 
     public function boot(): void
     {
+        CarbonMacroRegistrar::register();
+
         $migrationPath = __DIR__.'/../database/migrations';
         $migrations = [
             $migrationPath.'/2026_01_01_000001_create_workday_holiday_rules_table.php' => database_path('migrations/2026_01_01_000001_create_workday_holiday_rules_table.php'),
