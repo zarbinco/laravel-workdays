@@ -4,6 +4,10 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added Laravel validation rule factory support.
+- Added day-level validation rules for business days, non-working days, weekends, calendar holidays, custom holidays, and extra working days.
+- Added business-time validation rules and inclusive relative business-day validation rules.
+- Added README examples and tests for validation rules.
 - Added optional Carbon and CarbonImmutable macro registration.
 - Added workday-prefixed Carbon macro methods for day-level, explainability, and business-time APIs.
 - Added optional short Carbon macro aliases with conflict-safe registration.

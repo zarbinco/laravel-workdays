@@ -512,6 +512,69 @@ By default, existing macros and native Carbon methods are not overridden. `overr
 
 Date-returning macros return a new date instance and do not mutate the original object. `CarbonImmutable` macros return `CarbonImmutable`; mutable `Carbon` and `Illuminate\Support\Carbon` macros return a new instance of the original class where possible.
 
+## Validation Rules
+
+Validation rules are Laravel-native wrappers around the existing Workday APIs. Use them in Form Requests, Livewire components, controllers, or manual validators.
+
+Each rule accepts an optional profile. If you omit it, the configured default profile is used.
+
+```php
+use Zarbinco\LaravelWorkdays\Rules\WorkdayRule;
+
+$request->validate([
+    'delivery_date' => [
+        'required',
+        WorkdayRule::businessDay('iran'),
+    ],
+    'appointment_at' => [
+        'required',
+        WorkdayRule::businessTime('iran'),
+    ],
+    'due_date' => [
+        'required',
+        WorkdayRule::afterBusinessDays(3, now(), 'iran'),
+    ],
+]);
+```
+
+Livewire usage is the same shape:
+
+```php
+$this->validate([
+    'deliveryDate' => ['required', WorkdayRule::businessDay('iran')],
+]);
+```
+
+Available rule factories include:
+
+```php
+WorkdayRule::businessDay('iran');
+WorkdayRule::nonWorkingDay('iran');
+WorkdayRule::weekend('iran');
+WorkdayRule::calendarHoliday('iran');
+WorkdayRule::customHoliday('iran');
+WorkdayRule::extraWorkingDay('iran');
+WorkdayRule::notBusinessDay('iran');
+WorkdayRule::notWeekend('iran');
+WorkdayRule::notCalendarHoliday('iran');
+WorkdayRule::businessTime('iran');
+WorkdayRule::notBusinessTime('iran');
+WorkdayRule::afterBusinessDays(3, now(), 'iran');
+WorkdayRule::beforeBusinessDays(3, $deadline, 'iran');
+```
+
+Business-time rules require `working_hours` config. Missing working-hours config fails validation with a clear message instead of throwing a raw configuration exception.
+
+Relative business-day rules are inclusive. `afterBusinessDays(3, $from)` means the value must be on or after the date returned by `addBusinessDays($from, 3)`. `beforeBusinessDays(3, $deadline)` means the value must be on or before the date returned by `subBusinessDays($deadline, 3)`.
+
+The rule factory avoids an ambiguous `holiday()` helper. Use `calendarHoliday()`, `customHoliday()`, `nonWorkingDay()`, or `notCalendarHoliday()` depending on the exact package predicate you want.
+
+Override a rule message when needed:
+
+```php
+WorkdayRule::businessDay('iran')->message('Please choose a working day.');
+```
+
 ## Public API Reference
 
 ```php
