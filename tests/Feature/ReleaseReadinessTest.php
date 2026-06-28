@@ -352,29 +352,29 @@ final class ReleaseReadinessTest extends TestCase
         $this->assertFileExists(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'.github'.DIRECTORY_SEPARATOR.'workflows'.DIRECTORY_SEPARATOR.'tests.yml');
     }
 
-    public function test_readme_includes_database_storage_documentation(): void
+    public function test_english_documentation_includes_database_storage_documentation(): void
     {
-        $readme = $this->readme();
+        $documentation = $this->englishDocumentation();
 
-        $this->assertStringContainsString('Database Storage', $readme);
-        $this->assertStringContainsString('workday_holiday_rules', $readme);
-        $this->assertStringContainsString('workday_special_dates', $readme);
+        $this->assertStringContainsString('Database Storage', $documentation);
+        $this->assertStringContainsString('workday_holiday_rules', $documentation);
+        $this->assertStringContainsString('workday_special_dates', $documentation);
     }
 
-    public function test_readme_includes_iran_preset_warning(): void
+    public function test_english_documentation_includes_iran_preset_warning(): void
     {
-        $readme = $this->readme();
+        $documentation = $this->englishDocumentation();
 
-        $this->assertStringContainsString('not an exact official calendar generator', $readme);
-        $this->assertStringContainsString('Hijri dates may differ', $readme);
+        $this->assertStringContainsString('not an exact official calendar generator', $documentation);
+        $this->assertStringContainsString('Hijri dates may differ', $documentation);
     }
 
-    public function test_readme_includes_max_scan_days_troubleshooting(): void
+    public function test_english_documentation_includes_max_scan_days_troubleshooting(): void
     {
-        $readme = $this->readme();
+        $documentation = $this->englishDocumentation();
 
-        $this->assertStringContainsString('No business day found within max_scan_days', $readme);
-        $this->assertStringContainsString('max_scan_days', $readme);
+        $this->assertStringContainsString('No business day found within max_scan_days', $documentation);
+        $this->assertStringContainsString('max_scan_days', $documentation);
     }
 
     private function configureImpossibleBusinessDayProfile(): void
@@ -408,8 +408,8 @@ final class ReleaseReadinessTest extends TestCase
         return 'Unable to resolve a business day within [3] calendar days for profile [global]. Check weekends, holidays, extra working days, and max_scan_days config.';
     }
 
-    private function readme(): string
+    private function englishDocumentation(): string
     {
-        return file_get_contents(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'README.md') ?: '';
+        return file_get_contents(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'en'.DIRECTORY_SEPARATOR.'README.md') ?: '';
     }
 }
