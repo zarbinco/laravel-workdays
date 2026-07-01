@@ -28,6 +28,7 @@ return [
         'enabled' => false,
         'year' => null,
         'profile' => null,
+        'calendar_path' => null,
     ],
 
     'profiles' => [

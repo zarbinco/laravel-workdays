@@ -259,9 +259,9 @@ The Iran preset is useful, but it is not an exact official calendar generator. G
 
 ## Official Iran Yearly Calendars
 
-The config-based `iran` preset remains recurring and lightweight. Official yearly calendar datasets are opt-in static files for exact Jalali years and do not silently replace your config.
+The config-based `iran` preset remains recurring and lightweight. Official yearly calendar import is optional, uses local dataset files, and does not silently replace your config.
 
-In short, Iran 1405 is optional/import-only: it is available as a dataset resource, but it is not imported automatically and is not enabled by default.
+In short, Iran 1405 is optional/import-only: it is not bundled with the package, not imported automatically, and not enabled by default. To import it, provide a local dataset directory containing PHP files named by Jalali year, for example `1405.php`.
 
 Official yearly calendars are disabled by default:
 
@@ -270,14 +270,13 @@ Official yearly calendars are disabled by default:
     'enabled' => false,
     'year' => null,
     'profile' => null,
+    'calendar_path' => null,
 ],
 ```
 
-The package does not import, seed, or activate Iran 1405 automatically. The dataset only affects calculations after you explicitly import it into database storage.
+The package does not import, seed, activate, or fetch Iran 1405 automatically. A dataset only affects calculations after you explicitly import a local file into database storage.
 
-Currently supported official yearly dataset:
-
-- Iran 1405, sourced from the University of Tehran Calendar Center official calendar PDF, available as an optional resource.
+Use `--calendar-path` for one command run, or set `workdays.iran_official.calendar_path` to the same local directory.
 
 Publish and run the package migrations before importing a yearly dataset:
 
@@ -289,14 +288,14 @@ php artisan migrate
 Preview the import without writing records:
 
 ```bash
-php artisan workdays:import-iran-calendar 1405 --dry-run
+php artisan workdays:import-iran-calendar 1405 --calendar-path=/absolute/path/to/calendars/iran --dry-run
 ```
 
 Import into the default `iran` profile, or choose a separate profile:
 
 ```bash
-php artisan workdays:import-iran-calendar 1405
-php artisan workdays:import-iran-calendar 1405 --profile=iran-official-1405
+php artisan workdays:import-iran-calendar 1405 --calendar-path=/absolute/path/to/calendars/iran
+php artisan workdays:import-iran-calendar 1405 --profile=iran-official-1405 --calendar-path=/absolute/path/to/calendars/iran
 ```
 
 The command writes exact Gregorian `holiday` rows to `workday_special_dates`. It is idempotent, skips existing profile/date titles by default, and only overwrites them with `--force`. The installer never runs this command for you.
@@ -309,7 +308,7 @@ use Zarbinco\LaravelWorkdays\Facades\Workday;
 $info = Workday::profile('iran-official-1405')->explain('2026-03-21');
 ```
 
-Future years can be added as separate dataset files. Emergency closures or later government changes are not updated automatically; add manual special dates when official changes occur after a dataset is published.
+Future years can be added as separate local dataset files. Emergency closures or later government changes are not updated automatically; add manual special dates when official changes occur after a dataset is published.
 
 ## Database Storage Mode
 
@@ -673,6 +672,7 @@ return [
         'enabled' => false,
         'year' => null,
         'profile' => null,
+        'calendar_path' => null,
     ],
     'profiles' => [
         'profile-name' => [

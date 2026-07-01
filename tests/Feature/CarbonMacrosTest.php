@@ -253,7 +253,10 @@ final class CarbonMacrosTest extends TestCase
     {
         $this->loadWorkdayMigrations();
         config()->set('workdays.storage.driver', 'database');
-        Artisan::call('workdays:import-iran-calendar', ['year' => 1405]);
+        Artisan::call('workdays:import-iran-calendar', [
+            'year' => 1405,
+            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
+        ]);
 
         $this->assertFalse(CarbonImmutable::parse('2026-03-21')->workdayIsBusinessDay('iran'));
     }

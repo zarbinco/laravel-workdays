@@ -12,26 +12,28 @@ final class IranOfficialCalendarTest extends TestCase
 {
     public function test_can_list_available_iran_official_calendar_years(): void
     {
-        $this->assertContains(1405, (new IranOfficialCalendar)->availableYears());
+        $calendarPath = $this->createTemporaryIranOfficialCalendarFixture();
+
+        $this->assertContains(1405, (new IranOfficialCalendar($calendarPath))->availableYears());
     }
 
     public function test_can_load_iran_official_calendar_1405(): void
     {
-        $dataset = (new IranOfficialCalendar)->forYear(1405);
+        $dataset = (new IranOfficialCalendar($this->createTemporaryIranOfficialCalendarFixture()))->forYear(1405);
 
         $this->assertSame('IR', $dataset['country']);
         $this->assertSame('jalali', $dataset['calendar']);
         $this->assertSame(1405, $dataset['year']);
-        $this->assertCount(26, $dataset['holidays']);
+        $this->assertCount(1, $dataset['holidays']);
     }
 
     public function test_dataset_1405_has_source_metadata(): void
     {
-        $source = (new IranOfficialCalendar)->forYear(1405)['source'];
+        $source = (new IranOfficialCalendar($this->createTemporaryIranOfficialCalendarFixture()))->forYear(1405)['source'];
 
-        $this->assertSame('University of Tehran Calendar Center', $source['name']);
-        $this->assertStringContainsString('Calendar-1405.pdf', $source['url']);
-        $this->assertSame('2026-06-28', $source['retrieved_at']);
+        $this->assertSame('Laravel Workdays Test Fixture', $source['name']);
+        $this->assertStringContainsString('1405.php', $source['url']);
+        $this->assertSame('2026-03-21', $source['retrieved_at']);
     }
 
     public function test_dataset_1405_contains_verified_nowruz_or_eid_fitr_holiday(): void
@@ -48,7 +50,7 @@ final class IranOfficialCalendarTest extends TestCase
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('Iran official calendar dataset for year [1404] is not available.');
 
-        (new IranOfficialCalendar)->forYear(1404);
+        (new IranOfficialCalendar($this->createTemporaryIranOfficialCalendarFixture()))->forYear(1404);
     }
 
     public function test_dataset_requires_year(): void
@@ -111,7 +113,7 @@ final class IranOfficialCalendarTest extends TestCase
      */
     private function validDataset(): array
     {
-        return (new IranOfficialCalendar)->forYear(1405);
+        return (new IranOfficialCalendar($this->createTemporaryIranOfficialCalendarFixture()))->forYear(1405);
     }
 
     /**
@@ -119,7 +121,7 @@ final class IranOfficialCalendarTest extends TestCase
      */
     private function holidayByJalaliDate(string $date): array
     {
-        foreach ((new IranOfficialCalendar)->holidaysForYear(1405) as $holiday) {
+        foreach ((new IranOfficialCalendar($this->createTemporaryIranOfficialCalendarFixture()))->holidaysForYear(1405) as $holiday) {
             if ($holiday['date'] === $date) {
                 return $holiday;
             }

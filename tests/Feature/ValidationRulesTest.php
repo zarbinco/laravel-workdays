@@ -246,7 +246,10 @@ final class ValidationRulesTest extends TestCase
     {
         $this->loadWorkdayMigrations();
         config()->set('workdays.storage.driver', 'database');
-        Artisan::call('workdays:import-iran-calendar', ['year' => 1405]);
+        Artisan::call('workdays:import-iran-calendar', [
+            'year' => 1405,
+            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
+        ]);
 
         $validator = $this->validator('delivery_date', '2026-03-21', WorkdayRule::businessDay('iran'));
 
@@ -262,7 +265,10 @@ final class ValidationRulesTest extends TestCase
                 'Saturday' => [['09:00', '17:00']],
             ],
         ]);
-        Artisan::call('workdays:import-iran-calendar', ['year' => 1405]);
+        Artisan::call('workdays:import-iran-calendar', [
+            'year' => 1405,
+            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
+        ]);
         WorkdaySpecialDate::create([
             'profile' => 'iran',
             'date' => '2026-03-21',

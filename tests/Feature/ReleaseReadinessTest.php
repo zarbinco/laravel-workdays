@@ -30,6 +30,7 @@ final class ReleaseReadinessTest extends TestCase
             'enabled' => false,
             'year' => null,
             'profile' => null,
+            'calendar_path' => null,
         ], config('workdays.iran_official'));
     }
 
@@ -41,29 +42,33 @@ final class ReleaseReadinessTest extends TestCase
         $this->assertFalse($defaultConfig['iran_official']['enabled']);
         $this->assertNull($defaultConfig['iran_official']['year']);
         $this->assertNull($defaultConfig['iran_official']['profile']);
+        $this->assertNull($defaultConfig['iran_official']['calendar_path']);
         $this->assertFalse($iranConfig['iran_official']['enabled']);
         $this->assertNull($iranConfig['iran_official']['year']);
         $this->assertNull($iranConfig['iran_official']['profile']);
+        $this->assertNull($iranConfig['iran_official']['calendar_path']);
     }
 
     public function test_default_iran_profile_does_not_auto_load_1405_dataset(): void
     {
         $calculator = Workday::profile('iran');
 
-        $this->assertTrue((new IranOfficialCalendar)->hasYear(1405));
+        $this->assertFalse((new IranOfficialCalendar)->hasYear(1405));
+        $this->assertNotContains(1405, (new IranOfficialCalendar)->availableYears());
         $this->assertTrue($calculator->isBusinessDay('2026-04-14'));
         $this->assertFalse($calculator->isCalendarHoliday('2026-04-14'));
         $this->assertFalse($calculator->isCustomHoliday('2026-04-14'));
     }
 
-    public function test_1405_dataset_is_available_but_opt_in(): void
+    public function test_1405_dataset_is_available_from_custom_calendar_path(): void
     {
-        $calendar = new IranOfficialCalendar;
+        $calendar = new IranOfficialCalendar($this->createTemporaryIranOfficialCalendarFixture());
 
         $this->assertTrue($calendar->hasYear(1405));
         $this->assertContains(1405, $calendar->availableYears());
         $this->assertFalse(config('workdays.iran_official.enabled'));
         $this->assertNull(config('workdays.iran_official.year'));
+        $this->assertNull(config('workdays.iran_official.calendar_path'));
     }
 
     public function test_max_scan_days_must_be_positive_integer(): void

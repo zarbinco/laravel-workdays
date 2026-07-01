@@ -20,6 +20,7 @@ final class ImportIranCalendarCommand extends Command
     protected $signature = 'workdays:import-iran-calendar
         {year : Jalali year to import}
         {--profile=iran : Target workdays profile}
+        {--calendar-path= : Directory containing Iran official calendar dataset PHP files named by Jalali year, for example 1405.php}
         {--dry-run : Show import actions without writing records}
         {--force : Overwrite existing special-date titles}';
 
@@ -45,7 +46,7 @@ final class ImportIranCalendarCommand extends Command
             return SymfonyCommand::FAILURE;
         }
 
-        $calendar = new IranOfficialCalendar;
+        $calendar = new IranOfficialCalendar($this->calendarPath());
 
         try {
             $dataset = $calendar->forYear($year);
@@ -128,6 +129,23 @@ final class ImportIranCalendarCommand extends Command
         $this->error(self::MISSING_TABLES_MESSAGE);
 
         return false;
+    }
+
+    private function calendarPath(): ?string
+    {
+        $optionPath = $this->option('calendar-path');
+
+        if (is_string($optionPath) && trim($optionPath) !== '') {
+            return trim($optionPath);
+        }
+
+        $configPath = config('workdays.iran_official.calendar_path');
+
+        if (is_string($configPath) && trim($configPath) !== '') {
+            return trim($configPath);
+        }
+
+        return null;
     }
 
     /**

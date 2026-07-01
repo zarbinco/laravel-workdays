@@ -59,14 +59,16 @@ final class DocumentationStructureTest extends TestCase
         $persian = $this->fileContents('docs/fa/README.md');
 
         $this->assertStringContainsString('Iran 1405 is optional/import-only', $english);
+        $this->assertStringContainsString('not bundled with the package', $english);
         $this->assertStringContainsString('not imported automatically', $english);
         $this->assertStringContainsString('not enabled by default', $english);
-        $this->assertStringContainsString('php artisan workdays:import-iran-calendar 1405', $english);
+        $this->assertStringContainsString('--calendar-path=/absolute/path/to/calendars/iran', $english);
 
         $this->assertStringContainsString('۱۴۰۵', $persian);
         $this->assertStringContainsString('اختیاری و import-only', $persian);
+        $this->assertStringContainsString('پکیج دیتاست رسمی ۱۴۰۵ را bundle نمی‌کند', $persian);
         $this->assertStringContainsString('پکیج خودش ۱۴۰۵ را وارد دیتابیس نمی‌کند', $persian);
-        $this->assertStringContainsString('php artisan workdays:import-iran-calendar 1405', $persian);
+        $this->assertStringContainsString('--calendar-path=/absolute/path/to/calendars/iran', $persian);
     }
 
     public function test_persian_document_does_not_contain_placeholder_text(): void

@@ -15,6 +15,8 @@ It is designed for teams that need predictable delivery dates, leave calculation
 
 [English Document](docs/en/README.md) | [Persian Document](docs/fa/README.md)
 
+Official Iran yearly calendar imports are optional and require a local dataset directory. The package does not bundle or auto-import Iran 1405.
+
 ## Support
 
 Report issues through the [GitHub issue tracker](https://github.com/zarbinco/laravel-workdays/issues).

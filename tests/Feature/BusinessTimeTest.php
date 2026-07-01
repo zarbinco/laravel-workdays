@@ -344,7 +344,10 @@ final class BusinessTimeTest extends TestCase
         $this->loadWorkdayMigrations();
         $this->setIranWorkingHours();
         config()->set('workdays.storage.driver', 'database');
-        Artisan::call('workdays:import-iran-calendar', ['year' => 1405]);
+        Artisan::call('workdays:import-iran-calendar', [
+            'year' => 1405,
+            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
+        ]);
 
         $this->assertFalse(Workday::profile('iran')->isBusinessTime('2026-03-21 10:00'));
     }
@@ -354,7 +357,10 @@ final class BusinessTimeTest extends TestCase
         $this->loadWorkdayMigrations();
         $this->setIranWorkingHours();
         config()->set('workdays.storage.driver', 'database');
-        Artisan::call('workdays:import-iran-calendar', ['year' => 1405]);
+        Artisan::call('workdays:import-iran-calendar', [
+            'year' => 1405,
+            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
+        ]);
         WorkdaySpecialDate::create([
             'profile' => 'iran',
             'date' => '2026-03-21',
