@@ -58,29 +58,21 @@ jobs:
       - name: Validate Composer
         run: composer validate --strict
 
-      - name: Set Laravel Version
-        run: |
-          composer require \
-            "illuminate/support:${{ matrix.laravel }}" \
-            "illuminate/console:${{ matrix.laravel }}" \
-            "illuminate/database:${{ matrix.laravel }}" \
-            "illuminate/filesystem:${{ matrix.laravel }}" \
-            --no-interaction \
-            --no-update
-
-          composer require \
-            "orchestra/testbench:${{ matrix.testbench }}" \
-            --dev \
-            --no-interaction \
-            --no-update
-
       - name: Install Dependencies
         run: |
           composer update \
             --prefer-dist \
             --no-interaction \
             --no-progress \
+            --with "illuminate/support:${{ matrix.laravel }}" \
+            --with "illuminate/console:${{ matrix.laravel }}" \
+            --with "illuminate/database:${{ matrix.laravel }}" \
+            --with "illuminate/filesystem:${{ matrix.laravel }}" \
+            --with "orchestra/testbench:${{ matrix.testbench }}" \
             ${{ matrix.dependency-options }}
+
+      - name: Ensure Composer Manifest Was Not Mutated
+        run: git diff --exit-code composer.json
 
       - name: Run Tests
         run: composer test

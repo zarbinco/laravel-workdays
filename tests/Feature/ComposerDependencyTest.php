@@ -8,6 +8,14 @@ use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
 final class ComposerDependencyTest extends TestCase
 {
+    public function test_composer_requires_illuminate_support(): void
+    {
+        $this->assertSame(
+            '^12.0|^13.0',
+            $this->composerRequire()['illuminate/support'] ?? null,
+        );
+    }
+
     public function test_composer_requires_illuminate_console(): void
     {
         $this->assertSame(
@@ -29,6 +37,14 @@ final class ComposerDependencyTest extends TestCase
         $this->assertSame(
             '^12.0|^13.0',
             $this->composerRequire()['illuminate/filesystem'] ?? null,
+        );
+    }
+
+    public function test_composer_requires_testbench_for_supported_laravel_versions(): void
+    {
+        $this->assertSame(
+            '^10.0|^11.0',
+            $this->composerRequireDev()['orchestra/testbench'] ?? null,
         );
     }
 
@@ -62,6 +78,18 @@ final class ComposerDependencyTest extends TestCase
         $this->assertIsArray($require);
 
         return $require;
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private function composerRequireDev(): array
+    {
+        $requireDev = $this->composer()['require-dev'] ?? [];
+
+        $this->assertIsArray($requireDev);
+
+        return $requireDev;
     }
 
     /**
