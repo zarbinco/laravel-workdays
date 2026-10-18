@@ -12,7 +12,9 @@ use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
+use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
+use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
 use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
@@ -23,6 +25,11 @@ use Zarbinco\LaravelWorkdays\Support\StorageDriver;
 final class WorkdayManager
 {
     public function profile(string $profile): BusinessDayCalculator
+    {
+        return $this->calculator($profile);
+    }
+
+    private function calculator(string $profile, ?int $scanLimit = null): BusinessDayCalculator
     {
         $profiles = $this->profiles();
 
@@ -36,7 +43,7 @@ final class WorkdayManager
             profile: $profile,
             profileConfig: $profileConfig,
             includeStartDate: $this->includeStartDate(),
-            maxScanDays: $this->maxScanDays(),
+            maxScanDays: $scanLimit ?? $this->maxScanDays(),
             hijriCalendar: HijriCalendarAdapter::fromConfig(),
             holidayProvider: $this->holidayProvider($profiles),
         );
@@ -50,6 +57,16 @@ final class WorkdayManager
     public function resolveCutoff(string|DateTimeInterface $receivedAt): CutoffResult
     {
         return $this->defaultCalculator()->resolveCutoff($receivedAt);
+    }
+
+    /**
+     * @param  array<string, mixed>  $plan
+     */
+    public function planDelivery(string|DateTimeInterface $receivedAt, array $plan): DeliveryPlanResult
+    {
+        return (new DeliveryPlanner(
+            fn (string $profile, int $scanLimit): BusinessDayCalculator => $this->calculator($profile, $scanLimit),
+        ))->plan($receivedAt, $plan);
     }
 
     public function explain(string|DateTimeInterface $date): DayInfo

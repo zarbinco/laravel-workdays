@@ -676,6 +676,227 @@ Run each timestamp through that same calculator and compare these fields:
 
 Checklist: verify the first row before cut-off, the second at the exact boundary, the holiday row, and the Saturday extra-working-day row. Also check that Wednesday's `cutoff_at` is `null`, that the holiday's nominal `cutoff_at` does not grant eligibility, and that adding `.999999` before the deadline preserves microseconds. These checks need no working-hours configuration or annual Iran dataset.
 
+## Multi-Stage Delivery Planning
+
+`Workday::planDelivery($receivedAt, $plan)` composes existing profile calendars and business-time calculations into an ordered delivery estimate. For example, a store can calculate warehouse preparation, a shared warehouse/carrier handoff, carrier business-date lead time, and final delivery processing.
+
+The estimate is the completion instant of the configured final stage. The consuming store remains responsible for stock, payment approval, capacity, reservations, courier selection, and customer promises. Calling this API does not create or track a physical shipment, book a pickup, or contact a carrier.
+
+The API is opt-in and available on the facade and `WorkdayManager`. It requires no new mandatory profile settings, tables, jobs, or Composer dependencies. Call it on the manager/facade rather than on a selected profile calculator, because one plan can use several profiles.
+
+### Complete Profile And Plan Example
+
+This deterministic UTC example can run in a local Laravel application or a `php artisan tinker` session. Merge these profiles into the application's existing `workdays` configuration; choose real operating calendars and timezones for production.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$weekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$calendar = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [],
+    'extra_working_days' => [],
+];
+
+$profiles = [
+    'warehouse' => array_replace($calendar, [
+        'working_hours' => array_fill_keys($weekdays, [
+            ['09:00', '12:00'],
+            ['13:00', '17:00'],
+        ]),
+        'cutoff' => ['timezone' => 'UTC', 'time' => '14:00'],
+    ]),
+    'carrier' => array_replace($calendar, [
+        'working_hours' => array_fill_keys($weekdays, [['12:00', '18:00']]),
+    ]),
+    'last_mile' => array_replace($calendar, [
+        'working_hours' => array_fill_keys($weekdays, [['09:00', '17:00']]),
+    ]),
+];
+
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 14,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $profiles),
+]);
+
+$plan = [
+    'timezone' => 'UTC',
+    'profile_timezones' => [
+        'warehouse' => 'UTC',
+        'carrier' => 'UTC',
+        'last_mile' => 'UTC',
+    ],
+    'cutoff_profile' => 'warehouse',
+    'stages' => [
+        ['id' => 'preparation', 'type' => 'work', 'profile' => 'warehouse', 'minutes' => 120],
+        ['id' => 'pickup', 'type' => 'handoff', 'profiles' => ['warehouse', 'carrier']],
+        ['id' => 'transit', 'type' => 'business_days', 'profile' => 'carrier', 'days' => 2],
+        ['id' => 'final_delivery', 'type' => 'work', 'profile' => 'last_mile', 'minutes' => 60],
+    ],
+];
+
+$result = Workday::planDelivery('2026-06-29T13:30:00Z', $plan);
+$result->estimatedCompletionAt; // 2026-07-01 16:30:00 UTC
+$result->stages;
+$result->cutoffResult;
+$result->toArray();
+
+// The same API is available without the facade:
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)
+    ->planDelivery('2026-06-29T13:30:00Z', $plan);
+```
+
+`timezone`, `profile_timezones`, and a non-empty ordered `stages` list are required. Every referenced profile must already exist in `workdays.profiles` and have an explicit timezone in `profile_timezones`. Use IANA timezone identifiers such as `Asia/Tehran`, `Asia/Dubai`, or `UTC`; numeric offsets are not configuration timezones. Plans support at most 32 stages. IDs must be non-empty and unique; keep them stable so that stored results and stage errors remain understandable.
+
+Only the documented plan and stage keys are supported. Unknown keys, unsupported types, missing fields, unknown profiles, and malformed duration values throw `WorkdayConfigurationException`. `minutes` and `days` must be non-negative PHP integers: `0` is valid, while `'120'`, `120.0`, negative values, and booleans are rejected. A handoff requires an ordered list of exactly two different profiles.
+
+### Stage Semantics
+
+| Type | Required stage keys | Calculation |
+|---|---|---|
+| `work` | `id`, `type`, `profile`, `minutes` | Convert to the profile timezone, normalize to the next working instant with `nextBusinessTime()`, then consume positive minutes with `addBusinessMinutes()`. Zero minutes still normalizes to an open instant. |
+| `handoff` | `id`, `type`, `profiles` | Find the earliest instant at or after the incoming cursor when both profiles are open in their own timezones. Start and completion are the same instant. |
+| `business_days` | `id`, `type`, `profile`, `days` | Count exactly this many strictly future business calendar dates in the profile timezone, preserving the local clock time. Zero days preserves the cursor. Working hours are not required. |
+
+Work and handoff reuse existing weekend, holiday, half-day, split-shift, and extra-working-day behavior, including config/database/chain providers and `extra_working_day_hours` fallback. A missing working-hours configuration or an extra working day without usable hours is an error. A stage is never silently skipped.
+
+Business minutes consume working time and inherit the existing whole-minute accounting. Lunch breaks and closed dates do not consume work minutes. Business days advance date labels: they do not consume working hours, normalize to opening time, or simulate physical parcel movement. `include_start_date` does not change this stage's strictly future-date rule. Its result may be outside working hours; a following work or handoff stage performs its own normalization.
+
+Working intervals are half-open: `[start, end)`. Handoff at a shared opening is valid; handoff at a closing is not. A work stage may finish exactly at closing, but the next stage must find its own valid start. For example, preparation finishing at warehouse closing does not imply an immediate pickup. The handoff search compares UTC instants, advances monotonically, and confirms both profiles are open at the candidate; it never assumes that one profile's next opening suits the other.
+
+### Input, Timezones, And Cut-Off Routing
+
+`$receivedAt` accepts `string|\DateTimeInterface`, using the strict absolute formats documented for `resolveCutoff()`: space-separated `Y-m-d H:i[:s[.microseconds]]` for a naive time, or an ISO `T` timestamp with `Z`/`±HH:MM`. Fractions contain 1–6 digits and require seconds. A timezone-aware input preserves its instant; a naive timestamp uses the plan's `timezone`. Date-only, relative, malformed, invalid-date, and nonexistent local wall-clock inputs are rejected. An ambiguous naive time during a repeated clock hour is also rejected by the planner; provide an explicit offset to select its occurrence. Existing `resolveCutoff()` parsing behavior remains unchanged.
+
+The planner converts the current instant into each stage profile's `profile_timezones` entry before calling that profile's existing APIs. It compares instants in UTC and does not infer a profile timezone from Laravel's application timezone. Caller-provided mutable date objects are never mutated; the new result timestamps are `CarbonImmutable` UTC instants. Seconds and microseconds are retained where the existing business-time calculation permits.
+
+For `business_days`, skipped civil dates are not counted. If the requested target local clock time does not exist after a timezone transition, the stage fails explicitly instead of shifting it. Repeated target clock times follow PHP/Carbon's occurrence choice. Configure policies and test transition dates appropriate to the operating timezones.
+
+`cutoff_profile` is optional. Omit the key to start at the received instant without validating or depending on any cutoff configuration. When present, it must name the first stage's profile, that stage must be `work`, and the profile's configured cutoff timezone must exactly match its `profile_timezones` value.
+
+The existing `resolveCutoff()` is called once. If it permits the received business date, planning starts at the original order instant. Otherwise, planning starts at the beginning of its `effectiveBusinessDate` in the cutoff timezone. That date anchor is then normalized by the first work stage to the next actual opening; midnight does not mean warehouse opening. Cutoff is never reapplied to later stages. Existing exclusive boundaries, weekday overrides, holiday precedence, and future-date eligibility-window checks remain in effect. The embedded `CutoffResult` keeps its original local timezone and serialization semantics.
+
+### One Global Horizon
+
+`workdays.max_scan_days` bounds the entire plan. The anchor is the received timestamp's date in the plan timezone, with that date as day zero. A limit of `1` permits the next calendar date; the last permitted date is inclusive. Every stage result is converted back to the plan timezone before its date is checked. Later stages do not receive a fresh horizon, and skipped civil dates do not extend the date-label boundary.
+
+For example, with a received date of June 29 and a limit of `2`, a result on July 1 is permitted, while a result on July 2 fails even if each individual stage could find availability. The planner throws a stage/profile-specific `RuntimeException` when it cannot finish within the limit. It returns no partial successful plan.
+
+### Results And Serialization
+
+`Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult` and `DeliveryStageResult` are immutable result objects.
+
+| Plan property | Meaning |
+|---|---|
+| `timezone` | Plan input/horizon timezone. |
+| `receivedAt` | Original input instant in UTC. |
+| `planningStartAt` | Initial cursor after optional cutoff routing, in UTC. |
+| `cutoffResult` | The original `CutoffResult`, or `null` when cutoff is omitted. |
+| `stages` | Ordered array of `DeliveryStageResult` objects. |
+| `estimatedCompletionAt` | The final stage's completion instant in UTC. |
+
+| Stage property | Meaning |
+|---|---|
+| `id`, `type` | The supplied stable ID and supported stage type. |
+| `profiles` | One profile for work/business days, two for handoff. |
+| `readyAt` | Incoming UTC cursor. |
+| `startedAt` | Actual working/transfer start; the incoming instant for business days. |
+| `completedAt` | Completion instant passed to the next stage. |
+
+Every stage satisfies `readyAt <= startedAt <= completedAt`. Handoff and zero-minute work have identical start/completion instants. Zero-day business days have all three instants equal.
+
+`toArray()` uses stable snake_case keys. All new timestamps use `Y-m-d\TH:i:s.uP` with six microsecond digits and `+00:00`; the embedded cutoff result retains Phase 01's policy-local output. The first example produces:
+
+```php
+[
+    'timezone' => 'UTC',
+    'received_at' => '2026-06-29T13:30:00.000000+00:00',
+    'planning_start_at' => '2026-06-29T13:30:00.000000+00:00',
+    'cutoff_result' => [
+        'profile' => 'warehouse',
+        'timezone' => 'UTC',
+        'received_at' => '2026-06-29T13:30:00.000000+00:00',
+        'cutoff_at' => '2026-06-29T14:00:00.000000+00:00',
+        'effective_business_date' => '2026-06-29',
+        'same_day_eligible' => true,
+        'reason' => 'before_cutoff',
+    ],
+    'stages' => [
+        [
+            'id' => 'preparation', 'type' => 'work', 'profiles' => ['warehouse'],
+            'ready_at' => '2026-06-29T13:30:00.000000+00:00',
+            'started_at' => '2026-06-29T13:30:00.000000+00:00',
+            'completed_at' => '2026-06-29T15:30:00.000000+00:00',
+        ],
+        [
+            'id' => 'pickup', 'type' => 'handoff', 'profiles' => ['warehouse', 'carrier'],
+            'ready_at' => '2026-06-29T15:30:00.000000+00:00',
+            'started_at' => '2026-06-29T15:30:00.000000+00:00',
+            'completed_at' => '2026-06-29T15:30:00.000000+00:00',
+        ],
+        [
+            'id' => 'transit', 'type' => 'business_days', 'profiles' => ['carrier'],
+            'ready_at' => '2026-06-29T15:30:00.000000+00:00',
+            'started_at' => '2026-06-29T15:30:00.000000+00:00',
+            'completed_at' => '2026-07-01T15:30:00.000000+00:00',
+        ],
+        [
+            'id' => 'final_delivery', 'type' => 'work', 'profiles' => ['last_mile'],
+            'ready_at' => '2026-07-01T15:30:00.000000+00:00',
+            'started_at' => '2026-07-01T15:30:00.000000+00:00',
+            'completed_at' => '2026-07-01T16:30:00.000000+00:00',
+        ],
+    ],
+    'estimated_completion_at' => '2026-07-01T16:30:00.000000+00:00',
+]
+```
+
+### Store Application Integration And Errors
+
+Select the plan explicitly in the application's checkout or fulfillment service, after its stock/payment checks. Use a recorded receipt timestamp so recalculation is repeatable:
+
+```php
+$estimate = Workday::planDelivery($order->received_at, $plan);
+
+// Application-owned model fields; this package provides no shipment/order model.
+$order->estimated_delivery_completion_at = $estimate->estimatedCompletionAt;
+$order->delivery_calculation = $estimate->toArray();
+$order->save();
+```
+
+Configure the corresponding datetime/JSON casts in the consuming application. Store the applied policy/profile version alongside the calculation if historical reproducibility is needed: changing calendars or policies can change a future recalculation. Recheck application-owned inventory, capacity, payment, and booking requirements before communicating a delivery promise.
+
+| Exception | Typical cause |
+|---|---|
+| `Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException` | Invalid plan/profile settings, unknown keys/profiles, missing hours, or missing/mismatched requested cutoff. Stage errors include the stage ID or index. |
+| `InvalidArgumentException` | Unsupported or invalid received timestamp, including nonexistent or ambiguous naive wall time. |
+| `RuntimeException` | Exhausted global horizon, no shared handoff availability, no usable working time, or a nonexistent business-day target wall time. Stage failures include applicable stage/profile context. |
+
+Use the existing database/chain setup and migrations when those holiday providers are selected. Planning adds no database schema or persistent cache, and existing API paths do not activate it.
+
+Capacity, reservations, carrier integrations, automatic courier/address routing, real-time availability, and physical shipment creation/tracking remain application responsibilities. This phase does not add overnight working shifts or one-off date-specific opening-hour schedules. The result describes only completion of the configured final stage; the stage name `final_delivery` does not prove physical arrival.
+
+### Manual Verification Checklist
+
+Use the UTC fixture above with its 14-day horizon. All dates below are in 2026; compare UTC instants, including the ordered stage trace.
+
+| Check | Received time | Preparation | Pickup | Transit completion | Final processing / estimate |
+|---|---|---|---|---|---|
+| A: before cutoff | June 29, 13:30 | June 29, 13:30–15:30 | June 29, 15:30 | July 1, 15:30 | July 1, 15:30–16:30 |
+| B: exact cutoff | June 29, 14:00 | June 30, 09:00–11:00 | June 30, 13:00 | July 2, 13:00 | July 2, 13:00–14:00 |
+| C: holiday/weekend | July 2, 14:00 | July 6, 09:00–11:00 | July 6, 13:00 | July 8, 13:00 | July 8, 13:00–14:00 |
+
+Before C, add `['2026-07-03' => 'Example holiday']` to each fixture profile's `custom_holidays`. B's `planningStartAt` is June 30, 00:00 UTC; C's is July 6, 00:00 UTC. Neither anchor is the preparation start.
+
+In B and C, the carrier opens at 12:00 when the warehouse closes for lunch. The half-open warehouse window excludes 12:00, so their first shared instant is 13:00 and final processing ends at 14:00.
+
+- D: use a handoff-only plan without cutoff. Set warehouse timezone to `Asia/Tehran` with Monday–Friday 09:00–17:00, and carrier timezone to `Asia/Dubai` with Monday–Friday 10:00–18:00. Keep the plan timezone UTC. Input `2026-06-29T05:45:00Z` must hand off at `2026-06-29T06:00:00.000000+00:00`.
+- E: reset both profile timezones to UTC and use Monday–Friday 09:00–12:00 for warehouse and 13:00–17:00 for carrier. A handoff-only plan must throw within the global horizon.
+- F: restore the original UTC fixture and use a handoff-only plan. Input June 29 at 13:00 hands off immediately; 12:00 waits until 13:00 because the warehouse is at lunch; 17:00 rolls to June 30 at 13:00. A 60-minute warehouse work stage starting at 16:00 may complete at 17:00, but its following pickup must also wait until June 30 at 13:00.
+- G: add July 4 as an `extra_working_days` date to warehouse and carrier, with `extra_working_day_hours => [['09:00', '17:00']]` on both. Without cutoff, a plan containing 60 warehouse work minutes then handoff, received July 4 at 08:00 UTC, starts at 09:00 and completes both work and handoff at 10:00. Remove the fixture overrides after checking.
+
 ## Carbon Macros
 
 Carbon macros are enabled by default for `Carbon\Carbon`, `Carbon\CarbonImmutable`, and naturally for `Illuminate\Support\Carbon`.
@@ -811,6 +1032,7 @@ Workday::profile('global')->previousBusinessDay($date);
 Workday::profile('global')->diffBusinessDays($startDate, $endDate);
 Workday::profile('global')->calculate($date, 5);
 Workday::profile('warehouse')->resolveCutoff($receivedAt);
+Workday::planDelivery($receivedAt, $plan);
 ```
 
 `isHoliday()` means non-working day. It includes weekends, recurring calendar holidays, and exact custom holidays unless an extra working day override exists.

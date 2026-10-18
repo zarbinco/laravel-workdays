@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added opt-in multi-stage delivery estimates through `Workday::planDelivery()` and `WorkdayManager`, with immutable UTC `DeliveryPlanResult` and `DeliveryStageResult` objects.
+- Added profile-local working-minute stages, simultaneous two-profile handoffs, strictly future business-date lead times, optional reuse of order cut-off routing, and one global planning horizon.
+- Added strict delivery-plan validation and timestamp handling, per-invocation calculator reuse, focused calendar/storage/timezone integration tests, and aligned English/Persian configuration, store integration, result, and manual verification documentation.
 - Added opt-in per-profile order cut-off resolution through the default facade/manager and selected profile calculators, with an immutable `CutoffResult` and stable reason codes.
 - Added strict timestamp normalization in a required policy timezone, exclusive microsecond-aware boundaries, weekday cut-off overrides, disabled weekdays, and bounded future business-date assignment independent of working hours.
 - Added English/Persian cut-off configuration, integration and manual verification examples, plus focused calendar, storage, timezone, parsing, and compatibility tests.
