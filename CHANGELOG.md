@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added opt-in per-profile order cut-off resolution through the default facade/manager and selected profile calculators, with an immutable `CutoffResult` and stable reason codes.
+- Added strict timestamp normalization in a required policy timezone, exclusive microsecond-aware boundaries, weekday cut-off overrides, disabled weekdays, and bounded future business-date assignment independent of working hours.
+- Added English/Persian cut-off configuration, integration and manual verification examples, plus focused calendar, storage, timezone, parsing, and compatibility tests.
 - Added Laravel validation rule factory support.
 - Added day-level validation rules for business days, non-working days, weekends, calendar holidays, custom holidays, and extra working days.
 - Added business-time validation rules and inclusive relative business-day validation rules.

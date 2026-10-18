@@ -483,6 +483,199 @@ Business-time calculations use minute precision for add/diff methods. `addBusine
 
 String datetimes are parsed by Carbon using the application/default timezone. `DateTimeInterface` inputs preserve their timezone when converted to `CarbonImmutable`.
 
+## Order Cut-Off Policy
+
+`resolveCutoff()` assigns an order-received timestamp to a business date using the selected profile's calendar and cut-off. Same-day eligibility means that the local date is a business day and the timestamp is strictly before its enabled cut-off. The caller must supply a timestamp; there is no implicit `now()` fallback.
+
+This is a date-assignment decision. The consuming application evaluates stock, capacity, payment approval, reservations, preparation duration, and actual shipping or delivery promises. This API does not calculate warehouse opening, processing start, carrier pickup, dispatch, or notification times.
+
+### Opt-In Profile Configuration
+
+Add a `cutoff` block to the profile in `config/workdays.php`. For example:
+
+```php
+'default_profile' => 'warehouse',
+'include_start_date' => false,
+'max_scan_days' => 3660,
+'storage' => ['driver' => 'config'],
+'profiles' => [
+    'warehouse' => [
+        'weekends' => ['Saturday', 'Sunday'],
+        'holidays' => [
+            'gregorian' => [],
+            'jalali' => [],
+            'hijri' => [],
+        ],
+        'custom_holidays' => [],
+        'extra_working_days' => [],
+        'cutoff' => [
+            'timezone' => 'Asia/Tehran',
+            'time' => '14:00',
+            'weekdays' => [
+                'Thursday' => '11:00',
+                'Friday' => null,
+            ],
+        ],
+    ],
+],
+```
+
+`timezone` is required and must be a PHP timezone identifier such as `Asia/Tehran` or `UTC`; a numeric offset is not a policy timezone. `time` is required and must be a zero-padded 24-hour `HH:MM` string from `00:00` through `23:59`. `weekdays` is optional and defaults to an empty array.
+
+Weekday keys follow `WeekdayNormalizer`: ISO integers `1`–`7` (Monday–Sunday), English names or short names, and supported Persian names. For example, `4`, `Thursday`, `thu`, and `پنج‌شنبه` refer to Thursday. Multiple aliases for the same weekday in one policy are rejected.
+
+A missing override inherits `time`. A string replaces it. An explicit `null` disables eligibility on that weekday, including during future-date searches. It does not change `isBusinessDay()`, and an extra working day does not override it. The default config and Iran preset do not enable a cut-off automatically; the API never infers one from closing hours or another profile.
+
+The policy is validated only when `resolveCutoff()` is called. Missing or malformed cut-off configuration throws `Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException`. Existing day/time APIs, `explain()`, and `calculate()` continue to work with an absent or malformed `cutoff` block.
+
+### Usage And Accepted Timestamps
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+// Uses the configured default profile.
+$result = Workday::resolveCutoff('2026-06-29 13:59:59.999999');
+
+// Uses this profile's calendar and policy.
+$result = Workday::profile('warehouse')->resolveCutoff(
+    '2026-06-29T10:29:59.999999Z',
+);
+```
+
+The method accepts `string|\DateTimeInterface`. `DateTimeInterface` inputs preserve their instant and are converted to the policy timezone without mutating the supplied object or its timezone. All returned date/time objects are `Carbon\CarbonImmutable`.
+
+Supported string formats use Gregorian dates and this exact structure:
+
+| Format | Examples |
+|---|---|
+| `Y-m-d H:i` | `2026-06-29 13:59` |
+| `Y-m-d H:i:s`, optionally followed by a decimal fraction of 1–6 digits | `2026-06-29 13:59:59`, `2026-06-29 13:59:59.123456` |
+| `Y-m-d\TH:i` or `Y-m-d\TH:i:s`, optionally with a 1–6 digit seconds fraction, followed by `Z` or `±HH:MM` | `2026-06-29T10:29Z`, `2026-06-29T13:59:59.123456+03:30` |
+
+Date and time components are zero-padded. A fraction requires seconds. Explicit offsets use hours `00`–`23` and minutes `00`–`59`. An ISO string must include `Z` or an offset; a string without a timezone must use the space-separated format.
+
+Space-separated strings are interpreted as local wall-clock times in the policy timezone, even when the application's timezone differs. Offset/`Z` strings identify an instant, which is converted before selecting its local date, weekday, and cut-off. Seconds and microseconds are preserved. Empty or date-only strings, relative expressions such as `now`, `tomorrow`, or `next Monday`, impossible dates, malformed times/offsets, timezone names in input strings, and other formats throw `InvalidArgumentException`; invalid dates are never silently normalized.
+
+### Boundaries, Calendars, And Future Dates
+
+The comparison is always `receivedAt < cutoffAt`. With a `14:00` cut-off:
+
+| Local timestamp | Same-day eligible |
+|---|---|
+| `13:59:59.999999` | `true` |
+| `14:00:00.000000` | `false` |
+| `14:00:00.000001` | `false` |
+
+There is no rounding and no inclusive-boundary option. A `00:00` cut-off is valid configuration but gives that date no eligibility window; it cannot qualify today and is skipped as a future candidate.
+
+The existing calendar decides whether a date is a business day. Weekends, recurring Gregorian/Jalali/Hijri holidays, exact custom holidays, and config/database/chain storage keep their existing behavior and precedence. An extra working day can reopen a weekend or holiday, but cannot override a `null` or `00:00` cut-off.
+
+Working hours are independent: a timestamp before warehouse opening or during a split-shift lunch break can qualify. A profile without `working_hours`, or a business date with empty working windows, can qualify too. The cut-off is not clamped to closing time. The merchant chooses a deadline suitable for its operations; this API does not call `nextBusinessTime()` or calculate eligibility through business-minute differences.
+
+If the local date does not qualify, the resolver selects the earliest strictly later local date that is a business day and has an enabled cut-off with a non-empty window. `include_start_date` does not affect this rule. `max_scan_days` is one total future calendar-date budget: today is evaluated separately, `1` permits tomorrow, and a candidate exactly at the limit may succeed. A date beyond the limit is never examined. If no candidate qualifies, a `RuntimeException` reports the profile and search limit; no ineligible fallback date is returned.
+
+Dates advance by local calendar days, and each cut-off is constructed as a local wall-clock time with seconds and microseconds set to zero. Across daylight-saving changes, an ordinary `14:00` cut-off stays at local `14:00` even when the day has 23 or 25 hours. For example, this applies across `America/New_York`'s March 2026 transition. A nonexistent naive input wall time is rejected with `InvalidArgumentException`; a nonexistent configured cut-off wall time, such as `02:30` on `2026-03-08` in that zone, throws `WorkdayConfigurationException`. Repeated fall-back wall times use PHP/Carbon's chosen occurrence; use an explicit-offset input to disambiguate the received instant. The cut-off itself follows PHP/Carbon's occurrence choice for an ambiguous wall time.
+
+### Result And Serialization
+
+The result is an immutable `Zarbinco\LaravelWorkdays\Data\CutoffResult` with these read-only properties:
+
+| Property | Meaning |
+|---|---|
+| `profile` | Selected profile name (`string`). |
+| `timezone` | Resolved policy timezone (`string`). |
+| `receivedAt` | Supplied instant in the policy timezone, preserving seconds and microseconds (`CarbonImmutable`). |
+| `cutoffAt` | Nominal cut-off on the input's local date (`CarbonImmutable`), or `null` when that weekday is disabled. |
+| `effectiveBusinessDate` | Start of the assigned business date in the policy timezone (`CarbonImmutable`). |
+| `sameDayEligible` | Whether the assigned date is the input's normalized local date (`bool`). |
+| `reason` | Stable code for the current-date decision (`string`). |
+
+`cutoffAt` always describes the input date, even after that deadline has passed. On a holiday it may hold the nominal deadline as diagnostic policy information; that does not make the holiday eligible. `effectiveBusinessDate` is a date assignment: its start time does not mean warehouse opening, pickup, or dispatch. It is normally midnight; when a timezone transition removes midnight, PHP/Carbon uses the first representable start of that date (for example, `01:00` in `America/Santiago` on `2026-09-06`). The cut-off wall time itself is still checked strictly and is rejected if nonexistent.
+
+Reason precedence is:
+
+| Priority | Code | Meaning |
+|---|---|---|
+| 1 | `non_business_day` | The existing calendar marks the input date non-working. |
+| 2 | `cutoff_disabled` | The date is a business day, but its weekday override is `null`. |
+| 3 | `before_cutoff` | The date qualifies and the timestamp is strictly before its cut-off. |
+| 4 | `cutoff_reached` | The cut-off has been reached or passed, including a `00:00` cut-off. |
+
+`toArray()` exposes every property using stable snake_case keys:
+
+```php
+[
+    'profile' => 'warehouse',
+    'timezone' => 'Asia/Tehran',
+    'received_at' => '2026-06-29T13:59:59.999999+03:30',
+    'cutoff_at' => '2026-06-29T14:00:00.000000+03:30',
+    'effective_business_date' => '2026-06-29',
+    'same_day_eligible' => true,
+    'reason' => 'before_cutoff',
+]
+```
+
+Timestamps use `Y-m-d\TH:i:s.uP`, with six microsecond digits and an explicit UTC offset (including `+00:00` for UTC). `effective_business_date` uses `Y-m-d`; booleans remain booleans and a disabled `cutoff_at` remains `null`.
+
+### Laravel Integration Example
+
+In an application service, pass the order's recorded receipt time, for example an existing `DateTimeInterface` model cast:
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$decision = Workday::profile('warehouse')->resolveCutoff($order->received_at);
+
+// These are application-owned fields, not package-provided model attributes.
+$order->business_date = $decision->effectiveBusinessDate->toDateString();
+$order->cutoff_reason = $decision->reason;
+$order->save();
+```
+
+Apply the application's stock, capacity, payment, preparation, and shipping checks before promising fulfillment. Reuse the recorded receipt timestamp when reevaluating a decision.
+
+### Manual Verification With A Dedicated Profile
+
+In a local Laravel application, open `php artisan tinker` and configure this isolated example for that session:
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 14,
+    'workdays.profiles.cutoff-demo' => [
+        'weekends' => ['Saturday', 'Sunday'],
+        'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+        'custom_holidays' => ['2026-07-03' => 'Example holiday'],
+        'extra_working_days' => ['2026-07-04' => 'Example extra working day'],
+        'cutoff' => [
+            'timezone' => 'UTC',
+            'time' => '14:00',
+            'weekdays' => ['Wednesday' => null, 'Thursday' => '11:00'],
+        ],
+    ],
+]);
+
+$calculator = Workday::profile('cutoff-demo');
+$calculator->resolveCutoff('2026-06-29 13:59:59')->toArray();
+```
+
+Run each timestamp through that same calculator and compare these fields:
+
+| Received timestamp (UTC) | `same_day_eligible` | `effective_business_date` | `reason` |
+|---|---|---|---|
+| `2026-06-29 13:59:59` | `true` | `2026-06-29` | `before_cutoff` |
+| `2026-06-29 14:00:00` | `false` | `2026-06-30` | `cutoff_reached` |
+| `2026-06-30 14:00:00` | `false` | `2026-07-02` | `cutoff_reached` |
+| `2026-07-01 10:00:00` | `false` | `2026-07-02` | `cutoff_disabled` |
+| `2026-07-02 10:59:59` | `true` | `2026-07-02` | `before_cutoff` |
+| `2026-07-02 11:00:00` | `false` | `2026-07-04` | `cutoff_reached` |
+| `2026-07-03 10:00:00` | `false` | `2026-07-04` | `non_business_day` |
+| `2026-07-04 10:00:00` | `true` | `2026-07-04` | `before_cutoff` |
+
+Checklist: verify the first row before cut-off, the second at the exact boundary, the holiday row, and the Saturday extra-working-day row. Also check that Wednesday's `cutoff_at` is `null`, that the holiday's nominal `cutoff_at` does not grant eligibility, and that adding `.999999` before the deadline preserves microseconds. These checks need no working-hours configuration or annual Iran dataset.
+
 ## Carbon Macros
 
 Carbon macros are enabled by default for `Carbon\Carbon`, `Carbon\CarbonImmutable`, and naturally for `Illuminate\Support\Carbon`.
@@ -617,6 +810,7 @@ Workday::profile('global')->nextBusinessDay($date);
 Workday::profile('global')->previousBusinessDay($date);
 Workday::profile('global')->diffBusinessDays($startDate, $endDate);
 Workday::profile('global')->calculate($date, 5);
+Workday::profile('warehouse')->resolveCutoff($receivedAt);
 ```
 
 `isHoliday()` means non-working day. It includes weekends, recurring calendar holidays, and exact custom holidays unless an extra working day override exists.
@@ -707,9 +901,11 @@ The default storage driver is `config`.
 
 ## Config Validation
 
-Invalid config fails fast with `InvalidArgumentException`. The package validates profile shape, weekend values, storage drivers, recurring holiday calendar keys, recurring `MM-DD` holiday keys, exact Gregorian `Y-m-d` date keys, and `max_scan_days`.
+Invalid calendar config fails fast with `InvalidArgumentException`. The package validates profile shape, weekend values, storage drivers, recurring holiday calendar keys, recurring `MM-DD` holiday keys, exact Gregorian `Y-m-d` date keys, and `max_scan_days`.
 
 For example, `jallali` is rejected as an unknown calendar key; use `jalali`.
+
+The optional `cutoff` policy is validated separately and only by `resolveCutoff()`, as described in [Order Cut-Off Policy](#order-cut-off-policy).
 
 ## Troubleshooting
 

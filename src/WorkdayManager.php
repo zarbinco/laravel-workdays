@@ -10,6 +10,7 @@ use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
@@ -44,6 +45,11 @@ final class WorkdayManager
     public function isBusinessDay(string|DateTimeInterface $date): bool
     {
         return $this->defaultCalculator()->isBusinessDay($date);
+    }
+
+    public function resolveCutoff(string|DateTimeInterface $receivedAt): CutoffResult
+    {
+        return $this->defaultCalculator()->resolveCutoff($receivedAt);
     }
 
     public function explain(string|DateTimeInterface $date): DayInfo

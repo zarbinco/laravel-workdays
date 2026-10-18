@@ -10,12 +10,15 @@ use InvalidArgumentException;
 use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Data\DayReason;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
+use Zarbinco\LaravelWorkdays\Support\CutoffDateTimeNormalizer;
+use Zarbinco\LaravelWorkdays\Support\CutoffPolicy;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
 use Zarbinco\LaravelWorkdays\Support\WeekdayNormalizer;
@@ -74,6 +77,71 @@ final class BusinessDayCalculator
     public function isBusinessDay(string|DateTimeInterface $date): bool
     {
         return $this->isBusinessDate(DateNormalizer::toImmutable($date));
+    }
+
+    public function resolveCutoff(string|DateTimeInterface $receivedAt): CutoffResult
+    {
+        $policy = CutoffPolicy::fromProfileConfig($this->profile, $this->profileConfig);
+        $receivedAt = CutoffDateTimeNormalizer::toImmutable($receivedAt, $policy->timezone);
+        $date = $receivedAt->startOfDay();
+        $cutoffAt = $policy->cutoffAt($date);
+
+        $reason = match (true) {
+            ! $this->isBusinessDate($date) => 'non_business_day',
+            $cutoffAt === null => 'cutoff_disabled',
+            $cutoffAt->format('H:i') !== '00:00' && $receivedAt->lessThan($cutoffAt) => 'before_cutoff',
+            default => 'cutoff_reached',
+        };
+
+        $sameDayEligible = $reason === 'before_cutoff';
+        $effectiveBusinessDate = $date;
+
+        if (! $sameDayEligible) {
+            $resolved = false;
+            // Bound date labels as well as iterations: a timezone can skip an entire civil date.
+            $lastCandidateDate = CarbonImmutable::createFromFormat('!Y-m-d', $date->toDateString(), 'UTC')
+                ->addDays($this->maxScanDays)->toDateString();
+
+            for ($scannedDays = 0; $scannedDays < $this->maxScanDays; $scannedDays++) {
+                $effectiveBusinessDate = $effectiveBusinessDate->addDay()->startOfDay();
+
+                if ($effectiveBusinessDate->toDateString() > $lastCandidateDate) {
+                    break;
+                }
+
+                if (! $this->isBusinessDate($effectiveBusinessDate)) {
+                    continue;
+                }
+
+                $futureCutoff = $policy->cutoffAt($effectiveBusinessDate);
+
+                if ($futureCutoff !== null
+                    && $futureCutoff->format('H:i') !== '00:00'
+                    && $effectiveBusinessDate->lessThan($futureCutoff)) {
+                    $resolved = true;
+
+                    break;
+                }
+            }
+
+            if (! $resolved) {
+                throw new RuntimeException(sprintf(
+                    'Unable to resolve a cut-off eligible business date within [%d] future calendar days for profile [%s]. Check cutoff, weekends, holidays, extra working days, and max_scan_days config.',
+                    $this->maxScanDays,
+                    $this->profile,
+                ));
+            }
+        }
+
+        return new CutoffResult(
+            profile: $this->profile,
+            timezone: $policy->timezone,
+            receivedAt: $receivedAt,
+            cutoffAt: $cutoffAt,
+            effectiveBusinessDate: $effectiveBusinessDate,
+            sameDayEligible: $sameDayEligible,
+            reason: $reason,
+        );
     }
 
     public function isHoliday(string|DateTimeInterface $date): bool
