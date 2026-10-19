@@ -7,10 +7,12 @@ namespace Zarbinco\LaravelWorkdays;
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
 use InvalidArgumentException;
+use Zarbinco\LaravelWorkdays\Bulk\BulkCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
 use Zarbinco\LaravelWorkdays\Calendar\DeliveryPromiseAuditor;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Data\BulkCalculationResult;
 use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
@@ -38,6 +40,11 @@ use Zarbinco\LaravelWorkdays\Support\StorageDriver;
 
 final class WorkdayManager
 {
+    public function bulkCalculate(array $operations, array $options = []): BulkCalculationResult
+    {
+        return (new BulkCalculator)->calculate($operations, $options);
+    }
+
     public function profile(string $profile): BusinessDayCalculator
     {
         return $this->calculator($profile);

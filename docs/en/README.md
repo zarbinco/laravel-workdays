@@ -2439,6 +2439,331 @@ The explicit `skip` example preserves its closed nominal date; the extra-working
 config(['workdays' => $recurringOriginalConfig]);
 ```
 
+## Bulk Calculations And Holiday Prefetching
+
+`Workday::bulkCalculate($operations, $options = [])` executes independent calculations in input order while sharing eligible calculators, effective profile definitions, and holiday providers within that call. It is opt-in on the facade and `WorkdayManager`. Under unchanged configuration, calendar data, timezone rules, and dependencies, each completed item matches its corresponding individual API, including result types, microseconds, offsets, stages, reasons, and existing serialization.
+
+Ordinary profile calls still construct their own calculator/provider; existing single-operation reuse remains in place. Bulk sharing ends when the call returns. The package calculates estimates: it does not place orders, perform payments, reserve stock or carrier capacity, send notifications, launch workers, or create bookings. The application controls persistence, execution, authorization, and any background scheduling.
+
+### Complete Ten-Operation Local Example
+
+Use this dedicated fixture in local `php artisan tinker`. It uses config storage and fixed dates, with no database or order writes. The warehouse, inherited child, Tehran calendar, and overnight calendar deliberately exercise different operating rules.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$bulkOriginalConfig = config('workdays');
+$bulkWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$bulkBase = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [], 'extra_working_days' => [],
+    'working_hours' => array_fill_keys($bulkWeekdays, [['09:00', '17:00']]),
+    'cutoff' => ['timezone' => 'UTC', 'time' => '14:00'],
+];
+$bulkProfiles = [
+    'bulk_base' => $bulkBase,
+    'bulk_warehouse' => [
+        'extends' => 'bulk_base',
+        'custom_holidays' => ['2026-11-05' => 'Test holiday'],
+        'extra_working_days' => ['2026-11-07' => 'Test working Saturday'],
+    ],
+    'bulk_child' => ['extends' => 'bulk_warehouse'],
+    'bulk_carrier' => [
+        'extends' => 'bulk_base',
+        'working_hours' => array_fill_keys($bulkWeekdays, [['12:00', '18:00']]),
+    ],
+    'bulk_tehran' => ['extends' => 'bulk_base', 'cutoff' => ['timezone' => 'Asia/Tehran']],
+    'bulk_night' => [
+        'extends' => 'bulk_base', 'allow_overnight_working_hours' => true,
+        'working_hours' => [
+            'Monday' => [['22:00', '06:00']],
+            'Tuesday' => [], 'Wednesday' => [], 'Thursday' => [], 'Friday' => [],
+        ],
+    ],
+    'bulk_database_demo' => ['extends' => 'bulk_base'],
+];
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.include_start_date' => false,
+    'workdays.max_scan_days' => 40,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $bulkProfiles),
+]);
+$bulkPlan = [
+    'timezone' => 'UTC',
+    'profile_timezones' => ['bulk_warehouse' => 'UTC', 'bulk_carrier' => 'UTC'],
+    'cutoff_profile' => 'bulk_warehouse',
+    'stages' => [
+        ['id' => 'prepare', 'type' => 'work', 'profile' => 'bulk_warehouse', 'minutes' => 60],
+        ['id' => 'pickup', 'type' => 'handoff', 'profiles' => ['bulk_warehouse', 'bulk_carrier']],
+        ['id' => 'transit', 'type' => 'business_days', 'profile' => 'bulk_carrier', 'days' => 1],
+        ['id' => 'finish', 'type' => 'work', 'profile' => 'bulk_warehouse', 'minutes' => 30],
+    ],
+];
+$bulkSlotOptions = [
+    'profile' => 'bulk_warehouse', 'timezone' => 'UTC', 'days' => 1,
+    'duration_minutes' => 60, 'step_minutes' => 60, 'max_slots' => 3,
+];
+$bulkRecurrenceOptions = [
+    'profile' => 'bulk_child', 'timezone' => 'UTC', 'frequency' => 'monthly',
+    'interval' => 1, 'count' => 2, 'adjustment' => 'next',
+];
+$bulkSlaOptions = [
+    'profile' => 'bulk_warehouse', 'timezone' => 'UTC', 'target_minutes' => 240,
+    'pauses' => [['started_at' => '2026-11-02T10:00:00Z', 'ended_at' => '2026-11-02T11:00:00Z']],
+];
+$bulkOperations = [
+    ['id' => 'day', 'operation' => 'is_business_day', 'profile' => 'bulk_warehouse', 'date' => '2026-11-05'],
+    ['id' => 'windows', 'operation' => 'working_windows', 'profile' => 'bulk_night', 'date' => '2026-11-03'],
+    ['id' => 'days', 'operation' => 'add_business_days', 'profile' => 'bulk_warehouse',
+        'date' => new \DateTimeImmutable('2026-11-02T00:00:00Z'), 'days' => 3],
+    ['id' => 'minutes', 'operation' => 'add_business_minutes', 'profile' => 'bulk_tehran',
+        'datetime' => '2026-11-02T11:00:00.123456+03:30', 'minutes' => 120],
+    ['id' => 'cutoff', 'operation' => 'resolve_cutoff', 'profile' => 'bulk_tehran',
+        'received_at' => '2026-11-02T13:30:00+03:30'],
+    ['id' => 'delivery', 'operation' => 'plan_delivery', 'received_at' => '2026-11-02T10:00:00Z', 'plan' => $bulkPlan],
+    ['id' => 'slots', 'operation' => 'delivery_slots', 'ready_at' => '2026-11-02T12:00:00Z', 'options' => $bulkSlotOptions],
+    ['id' => 'recurrence', 'operation' => 'recurring_schedule', 'anchor_date' => '2026-11-02', 'options' => $bulkRecurrenceOptions],
+    ['id' => 'sla', 'operation' => 'evaluate_sla', 'started_at' => '2026-11-02T09:00:00Z',
+        'evaluated_at' => '2026-11-02T12:00:00Z', 'options' => $bulkSlaOptions],
+    ['id' => 'reverse', 'operation' => 'reverse_plan_delivery', 'desired_completion_at' => '2026-11-03T13:30:00Z',
+        'plan' => $bulkPlan, 'options' => ['lookback_days' => 14]],
+];
+$bulkOptions = ['on_error' => 'collect', 'prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30']];
+$bulkMixed = Workday::bulkCalculate($bulkOperations, $bulkOptions);
+$bulkMixed->total; // 10
+$bulkMixed->succeeded; // 10
+$bulkMixed->failed; // 0
+$bulkMixed->items[5]->result->estimatedCompletionAt; // November 3, 12:30 UTC
+$bulkMixed->toArray();
+
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)->bulkCalculate($bulkOperations, $bulkOptions);
+```
+
+### Complete Item Schema And Limits
+
+Every item has `id` and `operation`, plus exactly the operation's allowed argument keys below. The original API determines argument types, date parsing, duration rules, required nested settings, and domain validation; bulk does not substitute a new calendar algorithm.
+
+| `operation` | Argument keys | Actual PHP `result` |
+|---|---|---|
+| `is_business_day` | `profile`, `date` | Boolean. |
+| `working_windows` | `profile`, `date` | Array of existing `TimeWindow` objects. |
+| `add_business_days` | `profile`, `date`, `days` | `CarbonImmutable`. |
+| `add_business_minutes` | `profile`, `datetime`, `minutes` | `CarbonImmutable`. |
+| `resolve_cutoff` | `profile`, `received_at` | `CutoffResult`. |
+| `plan_delivery` | `received_at`, `plan` | `DeliveryPlanResult`. |
+| `delivery_slots` | `ready_at`, `options` | `DeliverySlotsResult`. |
+| `recurring_schedule` | `anchor_date`, `options` | `RecurringScheduleResult`. |
+| `evaluate_sla` | `started_at`, `evaluated_at`, `options` | `SlaResult`. |
+| `reverse_plan_delivery` | `desired_completion_at`, `plan`, `options` | `ReverseDeliveryPlanResult`. |
+
+`$operations` must be a non-empty indexed list of at most 1,000 associative items. IDs must be unique, non-empty UTF-8 strings of at most 128 characters; whitespace-only IDs are rejected. At most 50 distinct referenced profiles are allowed per batch, including profiles inside plans/options. Results preserve input order; no items are truncated or reordered. A false business-day value is a successful boolean result, not an item failure.
+
+Only top-level `on_error` and `prefetch` options are supported. `on_error` defaults to `collect` and accepts `collect` or `throw`. `prefetch` is optional and accepts exactly `from` and `through`, both strict Gregorian `Y-m-d` dates, with `from <= through` and at most 62 inclusive date labels. For example, November 1–30 covers 30 labels. Prefetch neither changes `max_scan_days` nor limits legitimate calculations to those dates.
+
+Envelope errors reject the whole call **before any calculation**: invalid list/item shapes, missing/duplicate/invalid IDs, unsupported operations, unknown item keys, fields belonging to another operation, invalid bulk options/ranges, or too many items/profiles. Missing or incorrectly typed operation arguments, unknown selected profiles, and nested plan/options validation are individual domain failures handled by `on_error`. No arbitrary payload callbacks are executed and no application customer/order tables are accessed.
+
+Each item's copied argument structure is limited to depth 32 and 100,000 nodes; exceeding that bound is an item domain failure. Input configuration/option references are detached for the operation, without changing global Laravel settings.
+
+### Error Policy And Immutable Results
+
+With `collect`, recognized input/configuration/bounded-calculation failures become ordered failed items and independent later items continue. With `throw`, the first domain failure raises a `RuntimeException` identifying the item ID and operation, with the original exception as its previous cause. There are no implicit retries. Unexpected programming errors and serious infrastructure failures, including missing tables, connection/PDO/query failures, and internal type errors, propagate even in collect mode.
+
+`Zarbinco\LaravelWorkdays\Data\BulkCalculationResult` exposes `total`, `succeeded`, `failed`, `items`, and `toArray()`. Each immutable `BulkCalculationItemResult` exposes `id`, `operation`, `success`, `result`, `error`, and `toArray()`. Successful items retain the existing typed return value, with null error. Failed items have null result and an error containing only the original exception `type` and a useful domain `message` limited to 2,048 UTF-8 characters. Profile names and calendar labels can remain in that message. The DTO attaches no stack trace, SQL/connection metadata, or credentials from database exceptions: PDO/query cause chains and programming errors propagate instead of being serialized. Envelope validation uses `WorkdayConfigurationException`.
+
+`toArray()` uses stable snake_case keys and JSON-compatible values. Existing DTOs and time windows use their existing `toArray()`; Carbon arithmetic timestamps use `Y-m-d\TH:i:s.uP` with their **actual offset** and six microsecond digits. Bulk does not force every result to UTC or flatten typed PHP results before returning them. Booleans, integers, and nulls preserve their types; date-only recurrence strings remain dates. IDs are supplied by the application, never inferred from customer/order records.
+
+### Prefetch, Negative Caching, And Freshness
+
+Config storage performs no holiday database queries. With database storage, explicit prefetch groups active recurring-rule reads across selected profiles and active special-date reads across those profiles and the exact inclusive requested range. Chain storage delegates database prefetch while retaining existing config/database precedence, titles, source metadata, inactive-row handling, and holiday/extra-working-day distinctions. Required inherited configuration is resolved; unrelated profiles are not eagerly loaded. Database rows remain keyed by the selected child's actual name, without automatic parent-row inheritance.
+
+The fetched range has **no padding**. Profile-local dates can differ from UTC dates, and overnight carry-in can require a prior owner-date. Any needed date outside the hint uses the existing lazy provider lookup. A covered date with zero active records is negatively cached and does not trigger another per-date query. A narrow hint therefore preserves complete calculations rather than inventing an empty calendar or raising a range error. Special-date row validation remains tied to access so an unrelated malformed row does not unexpectedly invalidate another date's calculation.
+
+One detached configuration context belongs to each batch. Effective definitions, adapters, and a shared provider are reused; calculators are cached by selected profile and actual scan limit. Different stage/timezone limits retain separate calculator variants. Stateful reverse search gets a fresh planner per item while sharing eligible dependencies. No global config mutation, persistent cache, static process cache, Redis dependency, schema/index change, or holiday-row locking is added.
+
+The next batch builds a fresh context and sees committed calendar edits, including in long-lived queue/Octane-style workers. Inside one batch, cached or prefetched rules can coexist with later lazy reads: concurrent database edits do **not** provide a transactionally consistent snapshot. The application chooses any transaction/isolation policy needed for current calculations. Bulk is not a historical audit mechanism. Phase 06 `captureDeliveryPromise()` and `compareDeliveryPromise()` are excluded from the dispatcher and keep their separate frozen-calendar, schema, and fingerprint guarantees.
+
+All previous timezone/DST, cutoff exclusivity/future-date eligibility, delivery stage/horizon, slot grid/notice, exceptional/overnight/`24:00`, SLA pause/breach, reverse exactness, and recurrence no-drift rules remain those of the individual APIs. Prefetch changes data access, not calculation semantics. Ordinary APIs do no new bulk work unless this API is called.
+
+### Local Parity, Error, And Load Checks
+
+Continue the config-only fixture. Compare complete serialized results, rather than only final dates:
+
+```php
+$bulkSerialize = function ($value) use (&$bulkSerialize) {
+    if ($value instanceof \DateTimeInterface) {
+        return $value->format('Y-m-d\TH:i:s.uP');
+    }
+    if (is_array($value)) {
+        return array_map($bulkSerialize, $value);
+    }
+
+    return is_object($value) ? $value->toArray() : $value;
+};
+$bulkIndividual = [
+    Workday::profile('bulk_warehouse')->isBusinessDay('2026-11-05'),
+    Workday::profile('bulk_night')->workingWindowsFor('2026-11-03'),
+    Workday::profile('bulk_warehouse')->addBusinessDays(new \DateTimeImmutable('2026-11-02T00:00:00Z'), 3),
+    Workday::profile('bulk_tehran')->addBusinessMinutes('2026-11-02T11:00:00.123456+03:30', 120),
+    Workday::profile('bulk_tehran')->resolveCutoff('2026-11-02T13:30:00+03:30'),
+    Workday::planDelivery('2026-11-02T10:00:00Z', $bulkPlan),
+    Workday::deliverySlots('2026-11-02T12:00:00Z', $bulkSlotOptions),
+    Workday::recurringSchedule('2026-11-02', $bulkRecurrenceOptions),
+    Workday::evaluateSla('2026-11-02T09:00:00Z', '2026-11-02T12:00:00Z', $bulkSlaOptions),
+    Workday::reversePlanDelivery('2026-11-03T13:30:00Z', $bulkPlan, ['lookback_days' => 14]),
+];
+$bulkAllTenMatch = array_map($bulkSerialize, $bulkIndividual)
+    === array_map(fn ($item) => $bulkSerialize($item->result), $bulkMixed->items); // true
+
+$bulkHundred = [];
+$bulkCalendarProfiles = ['bulk_warehouse', 'bulk_child', 'bulk_carrier', 'bulk_tehran'];
+$bulkDates = ['2026-11-02', '2026-11-05', '2026-11-07'];
+for ($i = 0; $i < 100; $i++) {
+    $bulkHundred[] = ['id' => 'probe-'.$i, 'operation' => 'is_business_day',
+        'profile' => $bulkCalendarProfiles[$i % 4], 'date' => $bulkDates[$i % 3]];
+}
+$bulkHundredIndividual = array_map(fn ($op) => Workday::profile($op['profile'])->isBusinessDay($op['date']), $bulkHundred);
+$bulkHundredResult = Workday::bulkCalculate($bulkHundred, $bulkOptions);
+$bulkHundredMatch = $bulkHundredIndividual === array_map(fn ($item) => $item->result, $bulkHundredResult->items); // true
+$bulkNight = Workday::bulkCalculate([
+    ['id' => 'night', 'operation' => 'add_business_minutes', 'profile' => 'bulk_night',
+        'datetime' => '2026-11-02T23:00:00Z', 'minutes' => 180],
+]); // November 3, 02:00 UTC
+$bulkCollected = Workday::bulkCalculate([
+    $bulkHundred[0],
+    ['id' => 'unknown-profile', 'operation' => 'is_business_day', 'profile' => 'bulk_missing', 'date' => '2026-11-02'],
+    ['id' => 'invalid-time', 'operation' => 'plan_delivery', 'received_at' => 'tomorrow', 'plan' => $bulkPlan],
+    $bulkHundred[1],
+]); // total=4, succeeded=2, failed=2, original order retained
+try {
+    Workday::bulkCalculate([
+        ['id' => 'invalid-time', 'operation' => 'plan_delivery', 'received_at' => 'tomorrow', 'plan' => $bulkPlan],
+    ], ['on_error' => 'throw']);
+} catch (\RuntimeException $exception) {
+    $bulkThrownItem = $exception->getMessage();
+}
+$bulkThousand = [];
+for ($i = 0; $i < 1000; $i++) {
+    $bulkThousand[] = array_replace($bulkHundred[$i % 100], ['id' => 'load-'.$i]);
+}
+$bulkStarted = hrtime(true);
+$bulkThousandResult = Workday::bulkCalculate($bulkThousand, $bulkOptions);
+$bulkThousandSeconds = (hrtime(true) - $bulkStarted) / 1_000_000_000;
+// A local observation, not a repeatable benchmark or a production speed guarantee.
+```
+
+### Optional Disposable-Database Query And Freshness Check
+
+Run this block only against a disposable local test database with the existing workday migrations. The profile `bulk_database_demo` must initially have no active holiday on November 3. Fixture setup/editing is separate from package calculations; the one explicit insert below is a test-data change, not a write performed by `bulkCalculate()`. Do not use production/customer tables. Query counts below include only holiday-table SELECTs, excluding setup and fixture edits.
+
+```php
+$bulkPreviousDriver = config('workdays.storage.driver');
+config(['workdays.storage.driver' => 'database']);
+$bulkConnection = \Illuminate\Support\Facades\DB::connection();
+$bulkConnection->enableQueryLog();
+$bulkDatabaseOps = array_map(fn ($op) => array_replace($op, ['profile' => 'bulk_database_demo']), $bulkHundred);
+$bulkHolidaySelects = function () use ($bulkConnection): int {
+    return count(array_filter($bulkConnection->getQueryLog(), fn ($query) =>
+        str_starts_with(strtolower(ltrim($query['query'])), 'select')
+        && (str_contains($query['query'], 'workday_holiday_rules') || str_contains($query['query'], 'workday_special_dates'))
+    ));
+};
+$bulkConnection->flushQueryLog();
+$bulkDatabaseIndividual = array_map(fn ($op) => Workday::profile($op['profile'])->isBusinessDay($op['date']), $bulkDatabaseOps);
+$bulkStandaloneQueries = $bulkHolidaySelects();
+$bulkConnection->flushQueryLog();
+$bulkDatabaseResult = Workday::bulkCalculate($bulkDatabaseOps, $bulkOptions);
+$bulkPrefetchedQueries = $bulkHolidaySelects();
+$bulkDatabaseMatch = $bulkDatabaseIndividual === array_map(fn ($item) => $item->result, $bulkDatabaseResult->items); // true
+
+$bulkFreshnessOp = [['id' => 'freshness', 'operation' => 'is_business_day',
+    'profile' => 'bulk_database_demo', 'date' => '2026-11-03']];
+$bulkBeforeEdit = Workday::bulkCalculate($bulkFreshnessOp, $bulkOptions); // result=true
+\Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate::query()->create([
+    'profile' => 'bulk_database_demo', 'date' => '2026-11-03',
+    'type' => 'holiday', 'title' => 'Disposable freshness fixture', 'is_active' => true,
+]); // Test setup only: retain/discard this disposable database through your test tooling.
+$bulkConnection->flushQueryLog();
+$bulkAfterEdit = Workday::bulkCalculate($bulkFreshnessOp, $bulkOptions); // result=false
+$bulkAfterEditQueries = $bulkHolidaySelects();
+$bulkConnection->disableQueryLog();
+config(['workdays.storage.driver' => $bulkPreviousDriver]);
+```
+
+### E-Commerce Chunking And Benchmarks
+
+The following is application code: it assumes an existing order model and an application-owned `deliveryPlan()` builder. The package provides neither. Choose a suitable bounded prefetch period for each chunk; handle each failed item explicitly, and decide whether to persist estimates. The API itself never updates an order.
+
+```php
+\App\Models\Order::query()->chunkById(1000, function ($orders) {
+    $operations = [];
+    foreach ($orders as $order) {
+        $operations[] = ['id' => 'order-'.$order->id, 'operation' => 'plan_delivery',
+            'received_at' => $order->created_at, 'plan' => $order->deliveryPlan()];
+    }
+    $batch = Workday::bulkCalculate($operations, ['on_error' => 'collect']);
+    foreach ($batch->items as $item) {
+        if (! $item->success) {
+            // Application logs/handles this order's item error.
+            continue;
+        }
+        $estimatedAt = $item->result->estimatedCompletionAt;
+        // Application decides whether to store this estimate.
+    }
+});
+```
+
+Process 10,000 orders in ten batches of at most 1,000, or smaller chunks. Release each result when handled instead of accumulating an unbounded result list. These calls are synchronous calculations, not persistent jobs; the application decides whether chunks run in a request, command, or its own queued jobs.
+
+The opt-in benchmark at `tests/Benchmarks/BulkCalculationsBenchmark.php` is separate from normal CI. It compares identical stable SQLite fixtures after setup/warm-up, uses repeated samples and median time, and reports processed/success/failed counts, holiday SELECTs, constructions, and peak memory. Its workloads include 100, 1,000, and 10,000 calculations in bounded chunks, multiple profiles, repeated dates, holidays, and delivery plans. Setup/seeding is excluded; chunking overhead and cache conditions must be distinguished. SQLite measurements do not establish MySQL production timings, and prefetch benefits depend on profile/date coverage, database latency, and the underlying algorithm. Outside-range lazy queries and bounded result size still matter; no universal speedup is promised.
+
+```bash
+php tests/Benchmarks/BulkCalculationsBenchmark.php --run
+```
+
+The script takes three samples per mode/size, each in a fresh PHP process with a fresh in-memory SQLite fixture and ten unmeasured warm-up operations. Both modes use chunks of at most 1,000; provider/calculator caches do not survive chunks or samples. Measured time includes operation construction, chunking, and complete result hashing, while excluding bootstrap, schema, seeding, and warm-up. Peak allocated PHP memory is reset after warm-up and reported as an absolute peak plus growth from the baseline. Holiday SELECTs are counted without retaining SQL query logs. Bulk construction counts are instrumented; standalone construction counts are explicitly derived from the unchanged two-profile delivery path, rather than presented as measured allocations.
+
+Measured on PHP 8.3.30, Laravel 13.18.0, Carbon 3.13.0, Verta 9.0, and in-memory SQLite 3.40.0, the final three-sample medians were:
+
+| Operations / chunks | Individual seconds | Bulk seconds | Holiday SELECTs: individual / bulk | Peak allocated MiB: individual / bulk | Peak growth MiB: individual / bulk |
+|---|---:|---:|---:|---:|---:|
+| 100 / 1 | 0.7164327 | 0.6101408 | 452 / 2 | 14 / 16 | 0 / 0 |
+| 1,000 / 1 | 9.0082473 | 6.7008960 | 4,562 / 2 | 18 / 28 | 4 / 12 |
+| 10,000 / 10 | 89.1847089 | 69.6629135 | 45,605 / 20 | 18 / 32 | 4 / 16 |
+
+All 18 samples completed every operation with zero failures and matching complete-result hashes. Bulk calculator/database-provider constructions were observed as `5/1`, `5/1`, and `50/10`; standalone calculator/total-provider counts were derived as `200/400`, `2,000/4,000`, and `20,000/40,000`, including unused config-provider objects in the standalone totals. These are measurements of this SQLite workload only. A subsequent validation-only correction for null profile configuration leaves these valid benchmark inputs/calculations unchanged; the review report records that measured-source distinction.
+
+### Twenty Local Manual Checks
+
+| Check | What to confirm |
+|---|---|
+| 1 | Dedicated warehouse/carrier/Tehran/child/night profiles exist. |
+| 2 | Holiday and extra-working-day rules differ from ordinary weekday calendars. |
+| 3 | `$bulkHundred` contains 100 uniquely identified test items. |
+| 4 | `$bulkHundredIndividual` comes from ordinary profile APIs. |
+| 5 | `$bulkHundredResult` runs the same items in one batch. |
+| 6 | `$bulkHundredMatch` and `$bulkAllTenMatch` are true; inspect complete typed/serialized results. |
+| 7 | The optional isolated database block uses database holiday storage. |
+| 8 | Compare `$bulkStandaloneQueries` with `$bulkPrefetchedQueries`. |
+| 9 | The hint covers the 30 date labels November 1–30. |
+| 10 | Repeated/empty covered dates use grouped reads and reduce holiday queries without changing results. |
+| 11 | The explicit disposable test-fixture edit adds a November 3 holiday after the first batch. |
+| 12 | A fresh batch returns false for that date, rather than leaking the previous batch's cache. |
+| 13 | The child matches inherited holiday and extra-day rules. |
+| 14 | Overnight windows carry into November 3; 180 minutes from 23:00 finishes at 02:00. |
+| 15 | Cutoff, delivery trace, slots, SLA, recurrence, and reverse results match individual calls. |
+| 16 | Invalid profile/timestamp items are collected with their IDs and operations. |
+| 17 | The two valid surrounding items still succeed and ordering is unchanged. |
+| 18 | Package calculations create no order, payment, reservation, notification, or database write; the separately marked fixture edit is test setup. |
+| 19 | The 1,000-item batch succeeds; record its local time/memory without treating one sample as a benchmark. |
+| 20 | Optionally run the dedicated 10,000-item benchmark in bounded chunks against disposable data. |
+
+Restore the local configuration after the checks. Discard the optional test database through your test tooling; do not delete production records.
+
+```php
+config(['workdays' => $bulkOriginalConfig]);
+```
+
 ## Carbon Macros
 
 Carbon macros are enabled by default for `Carbon\Carbon`, `Carbon\CarbonImmutable`, and naturally for `Illuminate\Support\Carbon`.
@@ -2583,6 +2908,7 @@ Workday::compareDeliveryPromise($snapshotOrPayload);
 Workday::deliverySlots($readyAt, $options);
 Workday::evaluateSla($startedAt, $evaluatedAt, $slaOptions);
 Workday::recurringSchedule($anchorDate, $recurringOptions);
+Workday::bulkCalculate($operations, $bulkOptions);
 ```
 
 `isHoliday()` means non-working day. It includes weekends, recurring calendar holidays, and exact custom holidays unless an extra working day override exists.

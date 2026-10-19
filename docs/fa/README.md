@@ -2361,6 +2361,331 @@ config(['workdays.storage.driver' => $recurringPreviousDriver]);
 config(['workdays' => $recurringOriginalConfig]);
 ```
 
+## محاسبات گروهی و پیش‌خوانی تعطیلی‌ها
+
+متد `Workday::bulkCalculate($operations, $options = [])` محاسبه‌های مستقل را به ترتیب ورودی اجرا می‌کند و calculatorهای قابل استفاده، تعریف مؤثر پروفایل و providerهای تعطیلی را در همان فراخوانی به اشتراک می‌گذارد. این قابلیت روی facade و `WorkdayManager` اختیاری است. با ثابت‌بودن تنظیمات، داده تقویم، قواعد منطقه زمانی و وابستگی‌ها، هر آیتم تکمیل‌شده با API تکی متناظر برابر است؛ از جمله نوع نتیجه، میکروثانیه، اختلاف ساعت، مراحل، دلیل‌ها و خروجی فعلی آرایه.
+
+فراخوانی معمول پروفایل همچنان calculator/provider خودش را می‌سازد و استفاده مجدد فعلی در هر محاسبه حفظ می‌شود. اشتراک گروهی با پایان فراخوانی تمام می‌شود. پکیج برآورد محاسبه می‌کند؛ سفارش ثبت نمی‌کند، پرداخت انجام نمی‌دهد، موجودی یا ظرفیت حمل رزرو نمی‌کند، اعلان نمی‌فرستد، worker اجرا نمی‌کند و رزرو ایجاد نمی‌کند. ذخیره‌سازی، اجرا، مجوز دسترسی و هر زمان‌بندی پس‌زمینه، مسئولیت برنامه است.
+
+### نمونه کامل محلی با ده عملیات
+
+این نمونه اختصاصی را در `php artisan tinker` محلی اجرا کن. storage آن config و تاریخ‌هایش ثابت است و در دیتابیس یا سفارش چیزی نمی‌نویسد. انبار، فرزند ارث‌برنده، تقویم تهران و تقویم شبانه عمداً قواعد کاری متفاوتی دارند.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$bulkOriginalConfig = config('workdays');
+$bulkWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$bulkBase = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [], 'extra_working_days' => [],
+    'working_hours' => array_fill_keys($bulkWeekdays, [['09:00', '17:00']]),
+    'cutoff' => ['timezone' => 'UTC', 'time' => '14:00'],
+];
+$bulkProfiles = [
+    'bulk_base' => $bulkBase,
+    'bulk_warehouse' => [
+        'extends' => 'bulk_base',
+        'custom_holidays' => ['2026-11-05' => 'Test holiday'],
+        'extra_working_days' => ['2026-11-07' => 'Test working Saturday'],
+    ],
+    'bulk_child' => ['extends' => 'bulk_warehouse'],
+    'bulk_carrier' => [
+        'extends' => 'bulk_base',
+        'working_hours' => array_fill_keys($bulkWeekdays, [['12:00', '18:00']]),
+    ],
+    'bulk_tehran' => ['extends' => 'bulk_base', 'cutoff' => ['timezone' => 'Asia/Tehran']],
+    'bulk_night' => [
+        'extends' => 'bulk_base', 'allow_overnight_working_hours' => true,
+        'working_hours' => [
+            'Monday' => [['22:00', '06:00']],
+            'Tuesday' => [], 'Wednesday' => [], 'Thursday' => [], 'Friday' => [],
+        ],
+    ],
+    'bulk_database_demo' => ['extends' => 'bulk_base'],
+];
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.include_start_date' => false,
+    'workdays.max_scan_days' => 40,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $bulkProfiles),
+]);
+$bulkPlan = [
+    'timezone' => 'UTC',
+    'profile_timezones' => ['bulk_warehouse' => 'UTC', 'bulk_carrier' => 'UTC'],
+    'cutoff_profile' => 'bulk_warehouse',
+    'stages' => [
+        ['id' => 'prepare', 'type' => 'work', 'profile' => 'bulk_warehouse', 'minutes' => 60],
+        ['id' => 'pickup', 'type' => 'handoff', 'profiles' => ['bulk_warehouse', 'bulk_carrier']],
+        ['id' => 'transit', 'type' => 'business_days', 'profile' => 'bulk_carrier', 'days' => 1],
+        ['id' => 'finish', 'type' => 'work', 'profile' => 'bulk_warehouse', 'minutes' => 30],
+    ],
+];
+$bulkSlotOptions = [
+    'profile' => 'bulk_warehouse', 'timezone' => 'UTC', 'days' => 1,
+    'duration_minutes' => 60, 'step_minutes' => 60, 'max_slots' => 3,
+];
+$bulkRecurrenceOptions = [
+    'profile' => 'bulk_child', 'timezone' => 'UTC', 'frequency' => 'monthly',
+    'interval' => 1, 'count' => 2, 'adjustment' => 'next',
+];
+$bulkSlaOptions = [
+    'profile' => 'bulk_warehouse', 'timezone' => 'UTC', 'target_minutes' => 240,
+    'pauses' => [['started_at' => '2026-11-02T10:00:00Z', 'ended_at' => '2026-11-02T11:00:00Z']],
+];
+$bulkOperations = [
+    ['id' => 'day', 'operation' => 'is_business_day', 'profile' => 'bulk_warehouse', 'date' => '2026-11-05'],
+    ['id' => 'windows', 'operation' => 'working_windows', 'profile' => 'bulk_night', 'date' => '2026-11-03'],
+    ['id' => 'days', 'operation' => 'add_business_days', 'profile' => 'bulk_warehouse',
+        'date' => new \DateTimeImmutable('2026-11-02T00:00:00Z'), 'days' => 3],
+    ['id' => 'minutes', 'operation' => 'add_business_minutes', 'profile' => 'bulk_tehran',
+        'datetime' => '2026-11-02T11:00:00.123456+03:30', 'minutes' => 120],
+    ['id' => 'cutoff', 'operation' => 'resolve_cutoff', 'profile' => 'bulk_tehran',
+        'received_at' => '2026-11-02T13:30:00+03:30'],
+    ['id' => 'delivery', 'operation' => 'plan_delivery', 'received_at' => '2026-11-02T10:00:00Z', 'plan' => $bulkPlan],
+    ['id' => 'slots', 'operation' => 'delivery_slots', 'ready_at' => '2026-11-02T12:00:00Z', 'options' => $bulkSlotOptions],
+    ['id' => 'recurrence', 'operation' => 'recurring_schedule', 'anchor_date' => '2026-11-02', 'options' => $bulkRecurrenceOptions],
+    ['id' => 'sla', 'operation' => 'evaluate_sla', 'started_at' => '2026-11-02T09:00:00Z',
+        'evaluated_at' => '2026-11-02T12:00:00Z', 'options' => $bulkSlaOptions],
+    ['id' => 'reverse', 'operation' => 'reverse_plan_delivery', 'desired_completion_at' => '2026-11-03T13:30:00Z',
+        'plan' => $bulkPlan, 'options' => ['lookback_days' => 14]],
+];
+$bulkOptions = ['on_error' => 'collect', 'prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30']];
+$bulkMixed = Workday::bulkCalculate($bulkOperations, $bulkOptions);
+$bulkMixed->total; // 10
+$bulkMixed->succeeded; // 10
+$bulkMixed->failed; // 0
+$bulkMixed->items[5]->result->estimatedCompletionAt; // November 3, 12:30 UTC
+$bulkMixed->toArray();
+
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)->bulkCalculate($bulkOperations, $bulkOptions);
+```
+
+### ساختار کامل آیتم و محدودیت‌ها
+
+هر آیتم `id` و `operation` دارد و فقط کلیدهای آرگومان مجاز همان عملیات را از جدول زیر می‌پذیرد. نوع آرگومان، تفسیر تاریخ، قواعد مدت، تنظیمات توکار الزامی و اعتبارسنجی دامنه را API اصلی تعیین می‌کند؛ محاسبه گروهی الگوریتم تقویم تازه‌ای جایگزین نمی‌کند.
+
+| `operation` | کلیدهای آرگومان | مقدار واقعی `result` در PHP |
+|---|---|---|
+| `is_business_day` | `profile`، `date` | بولی. |
+| `working_windows` | `profile`، `date` | آرایه‌ای از شیءهای فعلی `TimeWindow`. |
+| `add_business_days` | `profile`، `date`، `days` | `CarbonImmutable`. |
+| `add_business_minutes` | `profile`، `datetime`، `minutes` | `CarbonImmutable`. |
+| `resolve_cutoff` | `profile`، `received_at` | `CutoffResult`. |
+| `plan_delivery` | `received_at`، `plan` | `DeliveryPlanResult`. |
+| `delivery_slots` | `ready_at`، `options` | `DeliverySlotsResult`. |
+| `recurring_schedule` | `anchor_date`، `options` | `RecurringScheduleResult`. |
+| `evaluate_sla` | `started_at`، `evaluated_at`، `options` | `SlaResult`. |
+| `reverse_plan_delivery` | `desired_completion_at`، `plan`، `options` | `ReverseDeliveryPlanResult`. |
+
+مقدار `$operations` باید فهرست اندیس‌دار غیرخالی با حداکثر ۱٬۰۰۰ آیتم باشد و هر آیتم یک آرایه کلیددار باشد. شناسه‌ها باید رشته UTF-8 غیرخالی و یکتا با حداکثر ۱۲۸ نویسه باشند؛ شناسه‌ای که فقط فاصله، tab یا خط جدید دارد رد می‌شود. در هر گروه حداکثر ۵۰ پروفایل متمایزِ ارجاع‌شده مجاز است؛ شامل پروفایل‌های داخل برنامه‌ها و گزینه‌ها. ترتیب نتیجه همان ورودی می‌ماند و آیتمی حذف یا جابه‌جا نمی‌شود. مقدار false برای روز کاری، نتیجه بولی موفق است، نه شکست آیتم.
+
+فقط گزینه‌های سطح بالا `on_error` و `prefetch` پشتیبانی می‌شوند. پیش‌فرض `on_error` برابر `collect` است و `collect` یا `throw` می‌پذیرد. گزینه `prefetch` اختیاری است و دقیقاً `from` و `through` می‌خواهد؛ هر دو تاریخ سخت‌گیرانه میلادی `Y-m-d`، با شرط `from <= through` و حداکثر ۶۲ برچسب تاریخ شامل دو سر. برای مثال، ۱ تا ۳۰ نوامبر ۳۰ برچسب دارد. پیش‌خوانی نه `max_scan_days` را تغییر می‌دهد و نه محاسبه معتبر را به همین تاریخ‌ها محدود می‌کند.
+
+خطای ساختار بیرونی، کل فراخوانی را **پیش از هر محاسبه** رد می‌کند: شکل نامعتبر فهرست/آیتم، شناسه مفقود/تکراری/نامعتبر، عملیات پشتیبانی‌نشده، کلید ناشناخته، فیلد متعلق به عملیات دیگر، گزینه/بازه گروهی نامعتبر یا تعداد بیش از حد آیتم/پروفایل. آرگومان عملیاتی مفقود یا با نوع نادرست، پروفایل انتخابی ناشناخته و اعتبارسنجی برنامه/گزینه توکار، خطای دامنه همان آیتم هستند و از `on_error` پیروی می‌کنند. callback دلخواه داخل payload اجرا نمی‌شود و جدول مشتری/سفارش برنامه خوانده نمی‌شود.
+
+ساختار کپی‌شده آرگومان هر آیتم، حداکثر عمق ۳۲ و ۱۰۰٬۰۰۰ گره دارد؛ عبور از این حد، خطای همان آیتم است. ارجاع‌های تنظیمات/گزینه ورودی برای عملیات جدا می‌شوند، بدون تغییر تنظیمات سراسری Laravel.
+
+### سیاست خطا و نتیجه‌های تغییرناپذیر
+
+با `collect`، خطای شناخته‌شده ورودی، تنظیمات یا محاسبه محدود، به آیتم ناموفقِ مرتب تبدیل می‌شود و آیتم‌های مستقل بعدی ادامه می‌یابند. با `throw`، اولین خطای عملیات، `RuntimeException` با شناسه آیتم و عملیات می‌دهد و خطای اصلی را به‌عنوان علت قبلی نگه می‌دارد. تلاش مجدد ضمنی وجود ندارد. خطای غیرمنتظره برنامه‌نویسی و شکست جدی زیرساخت، از جمله نبود جدول، خطای اتصال/PDO/query و خطای نوع داخلی، حتی در حالت collect منتقل می‌شوند.
+
+کلاس `Zarbinco\LaravelWorkdays\Data\BulkCalculationResult` ویژگی‌های `total`، `succeeded`، `failed`، `items` و متد `toArray()` را دارد. هر `BulkCalculationItemResult` تغییرناپذیر، `id`، `operation`، `success`، `result`، `error` و `toArray()` دارد. آیتم موفق همان نوع نتیجه قبلی را نگه می‌دارد و خطایش null است. آیتم ناموفق نتیجه null و خطایی فقط با `type` اصلی exception و `message` مفید دامنه با حداکثر ۲٬۰۴۸ نویسه UTF-8 دارد. نام پروفایل و برچسب تاریخ می‌توانند در پیام بمانند. DTO، stack trace، اطلاعات SQL/اتصال یا اطلاعات ورودِ exception دیتابیس را ضمیمه نمی‌کند؛ زنجیره علت PDO/query و خطای برنامه‌نویسی به‌جای تبدیل‌شدن به آرایه منتقل می‌شوند. اعتبارسنجی ساختار بیرونی `WorkdayConfigurationException` می‌دهد.
+
+متد `toArray()` کلیدهای ثابت snake_case و مقدارهای سازگار با JSON می‌دهد. DTOها و پنجره‌های زمانی از `toArray()` فعلی خود استفاده می‌کنند؛ timestamp حساب Carbon با قالب `Y-m-d\TH:i:s.uP`، **اختلاف ساعت واقعی خودش** و شش رقم میکروثانیه می‌آید. محاسبه گروهی همه نتیجه‌ها را به UTC نمی‌برد و پیش از برگرداندن نتیجه PHP، نوع‌ها را به آرایه عمومی تبدیل نمی‌کند. بولی، عدد صحیح و null نوع خود را حفظ می‌کنند و رشته تاریخ تکرار همچنان فقط تاریخ می‌ماند. شناسه را برنامه می‌دهد و از رکورد مشتری/سفارش استخراج نمی‌شود.
+
+### پیش‌خوانی، کش نتیجه خالی و تازگی داده
+
+storage از نوع config برای تعطیلی query دیتابیس ندارد. در database، پیش‌خوانی صریح، قواعد تکرارشونده فعال پروفایل‌های انتخابی را گروهی می‌خواند و تاریخ‌های خاص فعال همان پروفایل‌ها را در محدوده دقیق و شامل‌شونده می‌گیرد. chain پیش‌خوانی دیتابیس را واگذار می‌کند و اولویت config/database، عنوان، اطلاعات منبع، رفتار ردیف غیرفعال و تفاوت تعطیلی با روز کاری اضافه را حفظ می‌کند. تنظیم ارث‌رسیده مورد نیاز محاسبه می‌شود و پروفایل نامرتبط پیشاپیش بارگذاری نمی‌شود. ردیف دیتابیس با نام واقعی فرزند انتخابی خوانده می‌شود و ردیف والد خودکار ارث نمی‌رسد.
+
+محدوده خوانده‌شده **حاشیه اضافی ندارد**. تاریخ محلی پروفایل‌ها ممکن است با تاریخ UTC فرق کند و ادامه شیفت شبانه ممکن است تاریخ مالک قبلی را بخواهد. هر تاریخ لازم بیرون از راهنما، با خواندن تنبل فعلی provider گرفته می‌شود. تاریخ تحت پوشش که ردیف فعال ندارد، به‌عنوان نتیجه خالی کش می‌شود و query تازه برای همان تاریخ نمی‌زند. بنابراین راهنمای کوچک، محاسبه را کامل نگه می‌دارد؛ تقویم خالی فرضی یا خطای محدوده نمی‌سازد. اعتبارسنجی ردیف تاریخ خاص همچنان هنگام دسترسی انجام می‌شود تا ردیف خراب نامرتبط، محاسبه تاریخ دیگری را نامعتبر نکند.
+
+هر گروه، یک زمینه تنظیمات جداشده از ورودی دارد. تعریف مؤثر، adapterها و provider مشترک دوباره استفاده می‌شوند؛ کلید کش calculator، پروفایل انتخابی و حد واقعی پیمایش است. حد متفاوت مرحله/منطقه زمانی، نمونه calculator جداگانه می‌گیرد. جست‌وجوی معکوسِ دارای وضعیت، برای هر آیتم برنامه‌ریز تازه دارد و وابستگی‌های قابل استفاده مشترک می‌مانند. تغییر config سراسری، کش پایدار، کش static فرایند، وابستگی Redis، تغییر جدول/ایندکس یا قفل ردیف تعطیلی اضافه نمی‌شود.
+
+گروه بعدی زمینه تازه می‌سازد و تغییر ثبت‌شده تقویم را می‌بیند؛ حتی در worker صف یا فرایند طولانی Octane. در یک گروه، قواعد کش‌شده یا پیش‌خوانده‌شده می‌توانند کنار خواندن تنبلِ بعدی قرار بگیرند: تغییر هم‌زمان دیتابیس، **snapshot سازگار تراکنشی** نمی‌دهد. برنامه، سیاست تراکنش/سطح جداسازی لازم برای محاسبه فعلی را انتخاب می‌کند. محاسبه گروهی ابزار بررسی تاریخی نیست. متدهای `captureDeliveryPromise()` و `compareDeliveryPromise()` فاز ۰۶ در dispatcher نیستند و تضمین مستقل تقویم ثابت، ساختار و fingerprint خود را حفظ می‌کنند.
+
+همه قواعد قبلی منطقه زمانی/DST، انحصاری‌بودن cutoff و واجد شرایط بودن تاریخ آینده، مرحله/افق تحویل، شبکه/notice بازه، ساعت اختصاصی/شبانه/`24:00`، توقف/نقض SLA، دقت معکوس و نبود رانش تکرار، همان API تکی می‌مانند. پیش‌خوانی دسترسی داده را تغییر می‌دهد، نه معنای محاسبه را. API معمول بدون فراخوانی این قابلیت، کار گروهی تازه‌ای انجام نمی‌دهد.
+
+### بررسی محلی برابری، خطا و بار
+
+نمونه config بالا را ادامه بده. نتیجه کامل تبدیل‌شده را مقایسه کن، نه فقط تاریخ نهایی:
+
+```php
+$bulkSerialize = function ($value) use (&$bulkSerialize) {
+    if ($value instanceof \DateTimeInterface) {
+        return $value->format('Y-m-d\TH:i:s.uP');
+    }
+    if (is_array($value)) {
+        return array_map($bulkSerialize, $value);
+    }
+
+    return is_object($value) ? $value->toArray() : $value;
+};
+$bulkIndividual = [
+    Workday::profile('bulk_warehouse')->isBusinessDay('2026-11-05'),
+    Workday::profile('bulk_night')->workingWindowsFor('2026-11-03'),
+    Workday::profile('bulk_warehouse')->addBusinessDays(new \DateTimeImmutable('2026-11-02T00:00:00Z'), 3),
+    Workday::profile('bulk_tehran')->addBusinessMinutes('2026-11-02T11:00:00.123456+03:30', 120),
+    Workday::profile('bulk_tehran')->resolveCutoff('2026-11-02T13:30:00+03:30'),
+    Workday::planDelivery('2026-11-02T10:00:00Z', $bulkPlan),
+    Workday::deliverySlots('2026-11-02T12:00:00Z', $bulkSlotOptions),
+    Workday::recurringSchedule('2026-11-02', $bulkRecurrenceOptions),
+    Workday::evaluateSla('2026-11-02T09:00:00Z', '2026-11-02T12:00:00Z', $bulkSlaOptions),
+    Workday::reversePlanDelivery('2026-11-03T13:30:00Z', $bulkPlan, ['lookback_days' => 14]),
+];
+$bulkAllTenMatch = array_map($bulkSerialize, $bulkIndividual)
+    === array_map(fn ($item) => $bulkSerialize($item->result), $bulkMixed->items); // true
+
+$bulkHundred = [];
+$bulkCalendarProfiles = ['bulk_warehouse', 'bulk_child', 'bulk_carrier', 'bulk_tehran'];
+$bulkDates = ['2026-11-02', '2026-11-05', '2026-11-07'];
+for ($i = 0; $i < 100; $i++) {
+    $bulkHundred[] = ['id' => 'probe-'.$i, 'operation' => 'is_business_day',
+        'profile' => $bulkCalendarProfiles[$i % 4], 'date' => $bulkDates[$i % 3]];
+}
+$bulkHundredIndividual = array_map(fn ($op) => Workday::profile($op['profile'])->isBusinessDay($op['date']), $bulkHundred);
+$bulkHundredResult = Workday::bulkCalculate($bulkHundred, $bulkOptions);
+$bulkHundredMatch = $bulkHundredIndividual === array_map(fn ($item) => $item->result, $bulkHundredResult->items); // true
+$bulkNight = Workday::bulkCalculate([
+    ['id' => 'night', 'operation' => 'add_business_minutes', 'profile' => 'bulk_night',
+        'datetime' => '2026-11-02T23:00:00Z', 'minutes' => 180],
+]); // November 3, 02:00 UTC
+$bulkCollected = Workday::bulkCalculate([
+    $bulkHundred[0],
+    ['id' => 'unknown-profile', 'operation' => 'is_business_day', 'profile' => 'bulk_missing', 'date' => '2026-11-02'],
+    ['id' => 'invalid-time', 'operation' => 'plan_delivery', 'received_at' => 'tomorrow', 'plan' => $bulkPlan],
+    $bulkHundred[1],
+]); // total=4, succeeded=2, failed=2, original order retained
+try {
+    Workday::bulkCalculate([
+        ['id' => 'invalid-time', 'operation' => 'plan_delivery', 'received_at' => 'tomorrow', 'plan' => $bulkPlan],
+    ], ['on_error' => 'throw']);
+} catch (\RuntimeException $exception) {
+    $bulkThrownItem = $exception->getMessage();
+}
+$bulkThousand = [];
+for ($i = 0; $i < 1000; $i++) {
+    $bulkThousand[] = array_replace($bulkHundred[$i % 100], ['id' => 'load-'.$i]);
+}
+$bulkStarted = hrtime(true);
+$bulkThousandResult = Workday::bulkCalculate($bulkThousand, $bulkOptions);
+$bulkThousandSeconds = (hrtime(true) - $bulkStarted) / 1_000_000_000;
+// A local observation, not a repeatable benchmark or a production speed guarantee.
+```
+
+### بررسی اختیاری query و تازگی در دیتابیس آزمایشی دورریختنی
+
+این بخش را فقط روی دیتابیس آزمایشی محلی دورریختنی با migrationهای فعلی اجرا کن. پروفایل `bulk_database_demo` نباید در ابتدا تعطیلی فعال در ۳ نوامبر داشته باشد. ساخت/ویرایش داده تست از محاسبه پکیج جداست؛ درج صریح زیر تغییر داده آزمایشی است، نه نوشتن توسط `bulkCalculate()`. از جدول تولید یا مشتری استفاده نکن. شمارش زیر فقط SELECT جدول‌های تعطیلی است و راه‌اندازی و ویرایش داده تست را شامل نمی‌شود.
+
+```php
+$bulkPreviousDriver = config('workdays.storage.driver');
+config(['workdays.storage.driver' => 'database']);
+$bulkConnection = \Illuminate\Support\Facades\DB::connection();
+$bulkConnection->enableQueryLog();
+$bulkDatabaseOps = array_map(fn ($op) => array_replace($op, ['profile' => 'bulk_database_demo']), $bulkHundred);
+$bulkHolidaySelects = function () use ($bulkConnection): int {
+    return count(array_filter($bulkConnection->getQueryLog(), fn ($query) =>
+        str_starts_with(strtolower(ltrim($query['query'])), 'select')
+        && (str_contains($query['query'], 'workday_holiday_rules') || str_contains($query['query'], 'workday_special_dates'))
+    ));
+};
+$bulkConnection->flushQueryLog();
+$bulkDatabaseIndividual = array_map(fn ($op) => Workday::profile($op['profile'])->isBusinessDay($op['date']), $bulkDatabaseOps);
+$bulkStandaloneQueries = $bulkHolidaySelects();
+$bulkConnection->flushQueryLog();
+$bulkDatabaseResult = Workday::bulkCalculate($bulkDatabaseOps, $bulkOptions);
+$bulkPrefetchedQueries = $bulkHolidaySelects();
+$bulkDatabaseMatch = $bulkDatabaseIndividual === array_map(fn ($item) => $item->result, $bulkDatabaseResult->items); // true
+
+$bulkFreshnessOp = [['id' => 'freshness', 'operation' => 'is_business_day',
+    'profile' => 'bulk_database_demo', 'date' => '2026-11-03']];
+$bulkBeforeEdit = Workday::bulkCalculate($bulkFreshnessOp, $bulkOptions); // result=true
+\Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate::query()->create([
+    'profile' => 'bulk_database_demo', 'date' => '2026-11-03',
+    'type' => 'holiday', 'title' => 'Disposable freshness fixture', 'is_active' => true,
+]); // Test setup only: retain/discard this disposable database through your test tooling.
+$bulkConnection->flushQueryLog();
+$bulkAfterEdit = Workday::bulkCalculate($bulkFreshnessOp, $bulkOptions); // result=false
+$bulkAfterEditQueries = $bulkHolidaySelects();
+$bulkConnection->disableQueryLog();
+config(['workdays.storage.driver' => $bulkPreviousDriver]);
+```
+
+### پردازش بخش‌بندی‌شده فروشگاه و بنچمارک
+
+کد زیر متعلق به برنامه است: مدل سفارش موجود و سازنده `deliveryPlan()` خود برنامه را فرض می‌کند. پکیج هیچ‌کدام را ارائه نمی‌دهد. برای هر بخش، محدوده پیش‌خوانی مناسب و محدود انتخاب کن؛ شکست هر آیتم را صریح رسیدگی کن و درباره ذخیره برآورد تصمیم بگیر. خود API سفارش را تغییر نمی‌دهد.
+
+```php
+\App\Models\Order::query()->chunkById(1000, function ($orders) {
+    $operations = [];
+    foreach ($orders as $order) {
+        $operations[] = ['id' => 'order-'.$order->id, 'operation' => 'plan_delivery',
+            'received_at' => $order->created_at, 'plan' => $order->deliveryPlan()];
+    }
+    $batch = Workday::bulkCalculate($operations, ['on_error' => 'collect']);
+    foreach ($batch->items as $item) {
+        if (! $item->success) {
+            // Application logs/handles this order's item error.
+            continue;
+        }
+        $estimatedAt = $item->result->estimatedCompletionAt;
+        // Application decides whether to store this estimate.
+    }
+});
+```
+
+۱۰٬۰۰۰ سفارش را در ده گروه حداکثر ۱٬۰۰۰تایی یا بخش‌های کوچک‌تر پردازش کن. پس از رسیدگی، نتیجه هر گروه را آزاد کن و فهرست نامحدود نتیجه‌ها نساز. این فراخوانی‌ها محاسبه هم‌زمان هستند، نه job پایدار؛ برنامه تصمیم می‌گیرد بخش‌ها در درخواست، command یا job صف خودش اجرا شوند.
+
+بنچمارک اختیاری `tests/Benchmarks/BulkCalculationsBenchmark.php` از CI معمول جداست. داده ثابت و یکسان SQLite را پس از راه‌اندازی/گرم‌کردن مقایسه می‌کند، نمونه‌های تکراری و میانه زمان را به کار می‌برد و تعداد پردازش‌شده/موفق/ناموفق، SELECT تعطیلی، ساخت نمونه‌ها و اوج حافظه را گزارش می‌کند. بارها شامل ۱۰۰، ۱٬۰۰۰ و ۱۰٬۰۰۰ محاسبه در بخش‌های محدود، چند پروفایل، تاریخ تکراری، تعطیلی و برنامه تحویل هستند. راه‌اندازی/درج داده حساب نمی‌شود؛ هزینه بخش‌بندی و وضعیت کش باید مشخص باشند. اندازه‌گیری SQLite، زمان تولید MySQL را ثابت نمی‌کند و سود پیش‌خوانی به پوشش پروفایل/تاریخ، تأخیر دیتابیس و الگوریتم زیرین بستگی دارد. query تنبل بیرون محدوده و اندازه محدود نتیجه همچنان مهم‌اند؛ افزایش سرعت همگانی وعده داده نمی‌شود.
+
+```bash
+php tests/Benchmarks/BulkCalculationsBenchmark.php --run
+```
+
+اسکریپت برای هر حالت/اندازه سه نمونه می‌گیرد؛ هر نمونه در فرایند PHP تازه با دیتابیس SQLite در حافظه تازه و ده عملیات گرم‌کردنِ اندازه‌گیری‌نشده اجرا می‌شود. هر دو حالت بخش‌های حداکثر ۱٬۰۰۰تایی دارند و کش provider/calculator از یک بخش یا نمونه به بعدی نمی‌ماند. زمان اندازه‌گیری‌شده شامل ساخت عملیات، بخش‌بندی و hash نتیجه کامل است و bootstrap، ساخت جدول، درج داده و گرم‌کردن را شامل نمی‌شود. اوج حافظه تخصیص‌یافته PHP پس از گرم‌کردن از نو شمرده می‌شود و هم مقدار مطلق و هم رشد نسبت به مبدأ گزارش می‌شوند. SELECT تعطیلی بدون نگه‌داشتن لاگ SQL شمرده می‌شود. تعداد ساخت نمونه در bulk ابزار شمارش دارد؛ تعداد مسیر تکی صریحاً از مسیر تحویل دوپروفایلیِ بدون تغییر استنتاج می‌شود و به‌عنوان تخصیص اندازه‌گیری‌شده ارائه نمی‌شود.
+
+اندازه‌گیری با PHP 8.3.30، Laravel 13.18.0، Carbon 3.13.0، Verta 9.0 و SQLite 3.40.0 در حافظه انجام شد. میانه نهایی سه نمونه این بود:
+
+| عملیات / بخش | ثانیه تکی | ثانیه گروهی | SELECT تعطیلی: تکی / گروهی | اوج تخصیص MiB: تکی / گروهی | رشد اوج MiB: تکی / گروهی |
+|---|---:|---:|---:|---:|---:|
+| 100 / 1 | 0.7164327 | 0.6101408 | 452 / 2 | 14 / 16 | 0 / 0 |
+| 1,000 / 1 | 9.0082473 | 6.7008960 | 4,562 / 2 | 18 / 28 | 4 / 12 |
+| 10,000 / 10 | 89.1847089 | 69.6629135 | 45,605 / 20 | 18 / 32 | 4 / 16 |
+
+هر ۱۸ نمونه همه عملیات را بدون شکست تمام کردند و hash نتیجه کامل برابر بود. ساخت calculator/provider دیتابیس در حالت گروهی، به‌ترتیب `5/1`، `5/1` و `50/10` مشاهده شد؛ تعداد calculator/کل provider در حالت تکی، `200/400`، `2,000/4,000` و `20,000/40,000` از مسیر کد استنتاج شد و provider تنظیماتِ ساخته‌شده ولی استفاده‌نشده هم در جمع تکی حساب شد. این اعداد فقط اندازه‌گیری همین بار SQLite هستند. اصلاحی که بعداً فقط برای اعتبارسنجی تنظیم پروفایل null انجام شد، ورودی و محاسبه معتبر این بنچمارک را تغییر نمی‌دهد؛ گزارش بازبینی، این تفاوت نسخه اندازه‌گیری‌شده را ثبت می‌کند.
+
+### بیست بررسی دستی محلی
+
+| بررسی | نتیجه مورد انتظار |
+|---|---|
+| ۱ | پروفایل اختصاصی انبار/حمل‌کننده/تهران/فرزند/شبانه تعریف شده است. |
+| ۲ | قواعد تعطیلی و روز کاری اضافه با تقویم عادی روز هفته فرق دارند. |
+| ۳ | مقدار `$bulkHundred` صد آیتم آزمایشی با شناسه یکتا دارد. |
+| ۴ | مقدار `$bulkHundredIndividual` از API معمول پروفایل آمده است. |
+| ۵ | مقدار `$bulkHundredResult` همان آیتم‌ها را در یک گروه اجرا می‌کند. |
+| ۶ | مقدارهای `$bulkHundredMatch` و `$bulkAllTenMatch` برابر true هستند؛ نوع و خروجی کامل را هم بررسی کن. |
+| ۷ | بخش اختیاری دیتابیس جداگانه از storage دیتابیس تعطیلی استفاده می‌کند. |
+| ۸ | مقدار `$bulkStandaloneQueries` را با `$bulkPrefetchedQueries` مقایسه کن. |
+| ۹ | راهنما ۳۰ برچسب تاریخ از ۱ تا ۳۰ نوامبر را پوشش می‌دهد. |
+| ۱۰ | تاریخ تکراری/خالی تحت پوشش با خواندن گروهی، query تعطیلی را بدون تغییر نتیجه کم می‌کند. |
+| ۱۱ | ویرایش صریح داده تست دورریختنی، پس از گروه اول تعطیلی ۳ نوامبر را اضافه می‌کند. |
+| ۱۲ | گروه تازه برای آن تاریخ false می‌دهد و کش گروه قبلی نشت نمی‌کند. |
+| ۱۳ | فرزند، قواعد تعطیلی و روز کاری اضافه ارث‌رسیده را حفظ می‌کند. |
+| ۱۴ | پنجره شبانه به ۳ نوامبر ادامه دارد؛ ۱۸۰ دقیقه از 23:00 در 02:00 تمام می‌شود. |
+| ۱۵ | cutoff، خط زمانی تحویل، بازه، SLA، تکرار و معکوس با فراخوانی تکی برابرند. |
+| ۱۶ | پروفایل/زمان نامعتبر با شناسه و عملیات همان آیتم جمع‌آوری می‌شوند. |
+| ۱۷ | دو آیتم معتبر اطراف خطا همچنان موفق‌اند و ترتیب عوض نمی‌شود. |
+| ۱۸ | محاسبه پکیج سفارش، پرداخت، رزرو، اعلان یا نوشتن در دیتابیس ایجاد نمی‌کند؛ ویرایش مشخص‌شده جداگانه، راه‌اندازی تست است. |
+| ۱۹ | گروه ۱٬۰۰۰تایی موفق است؛ زمان/حافظه محلی را ثبت کن ولی یک نمونه را بنچمارک حساب نکن. |
+| ۲۰ | در صورت نیاز، بنچمارک اختصاصی ۱۰٬۰۰۰تایی را با داده دورریختنی و بخش‌های محدود اجرا کن. |
+
+پس از بررسی، تنظیم محلی را برگردان. دیتابیس آزمایشی اختیاری را با ابزار تست خودت کنار بگذار؛ رکورد تولید حذف نکن.
+
+```php
+config(['workdays' => $bulkOriginalConfig]);
+```
+
 ## Carbon macros
 
 Carbon macros به صورت پیش‌فرض برای `Carbon\Carbon`، `Carbon\CarbonImmutable` و `Illuminate\Support\Carbon` ثبت می‌شوند.
@@ -2491,6 +2816,7 @@ Workday::compareDeliveryPromise($snapshotOrPayload);
 Workday::deliverySlots($readyAt, $options);
 Workday::evaluateSla($startedAt, $evaluatedAt, $slaOptions);
 Workday::recurringSchedule($anchorDate, $recurringOptions);
+Workday::bulkCalculate($operations, $bulkOptions);
 ```
 
 متد `isHoliday()` یعنی روز غیرکاری. این نتیجه می‌تواند به خاطر آخر هفته، تعطیلی تقویمی یا تعطیلی دقیق باشد، مگر اینکه همان تاریخ به عنوان روز کاری جایگزین تعریف شده باشد.

@@ -25,7 +25,7 @@ final readonly class DeliverySlotGenerator
     /**
      * @param  callable(string): BusinessDayCalculator  $resolveCalculator
      */
-    public function __construct(callable $resolveCalculator)
+    public function __construct(callable $resolveCalculator, private ?array $scanSettings = null)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
     }
@@ -256,7 +256,7 @@ final readonly class DeliverySlotGenerator
         }
 
         try {
-            $limit = ProfileConfigValidator::validateMaxScanDays(config('workdays.max_scan_days', 3660));
+            $limit = ProfileConfigValidator::validateMaxScanDays($this->scanSettings === null ? config('workdays.max_scan_days', 3660) : $this->scanSettings['max_scan_days']);
         } catch (InvalidArgumentException $exception) {
             throw new WorkdayConfigurationException('Invalid delivery-slot max_scan_days: '.$exception->getMessage(), previous: $exception);
         }

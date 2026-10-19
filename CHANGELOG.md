@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added opt-in `bulkCalculate()` dispatch for ten existing calendar, working-time, cutoff, delivery, slot, recurrence, SLA, and reverse APIs with ordered immutable summaries, preserved typed results, bounded batches, and explicit collect/throw error policies.
+- Added batch-local configuration/calculator/provider reuse and optional bounded grouped holiday prefetch with negative caching, lazy outside-range fallback, fresh independent batch contexts, and existing config/database/chain and inherited-profile semantics.
+- Added focused parity, validation, database-query and worker-freshness regression coverage, an opt-in repeated-sample benchmark, and aligned English/Persian schema, consistency, e-commerce chunking, limitations, and twenty-check verification guides.
 - Added opt-in recurring business schedules through `recurringSchedule()`, with direct original-anchor weekly and Gregorian/Jalali monthly cycles, strict date-only inputs, month-end handling, and no drift after holiday or short-month adjustments.
 - Added bounded next/previous/skip business-date adjustment, explicit skipped cycles, collision rejection/allowance with chronological safeguards, and immutable date-only result objects with stable serialization using existing calendars, storage, and inherited profiles.
 - Added focused recurrence/calendar/storage/timezone regression coverage and aligned English/Persian subscription examples, limits, application responsibilities, and seventeen-check local verification guides without automatic order creation, payments, or execution.

@@ -7,12 +7,19 @@ namespace Zarbinco\LaravelWorkdays\Holidays;
 use Carbon\CarbonImmutable;
 use Zarbinco\LaravelWorkdays\Data\Holiday;
 
-final readonly class ChainHolidayProvider implements HolidayProviderInterface
+final readonly class ChainHolidayProvider implements RangePrefetchableHolidayProviderInterface
 {
     public function __construct(
         private HolidayProviderInterface $configProvider,
         private HolidayProviderInterface $databaseProvider,
     ) {}
+
+    public function prefetch(array $profiles, string $from, string $through): void
+    {
+        if ($this->databaseProvider instanceof RangePrefetchableHolidayProviderInterface) {
+            $this->databaseProvider->prefetch($profiles, $from, $through);
+        }
+    }
 
     public function recurringHolidays(string $profile, string $calendar): array
     {

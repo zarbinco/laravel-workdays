@@ -30,7 +30,7 @@ final readonly class DeliveryPlanner
      * @param  callable(string, int): BusinessDayCalculator  $resolveCalculator
      * @param  null|callable(string): array<string, mixed>  $resolveProfileConfig
      */
-    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null, private ?int $horizonDays = null, private ?array $knownProfiles = null)
+    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null, private ?int $horizonDays = null, private ?array $knownProfiles = null, private ?array $scanSettings = null)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
         $this->resolveProfileConfig = $resolveProfileConfig === null ? null : Closure::fromCallable($resolveProfileConfig);
@@ -46,7 +46,7 @@ final readonly class DeliveryPlanner
         $receivedAt = $this->normalizeInput($receivedAt, $timezone);
 
         try {
-            $limit = ProfileConfigValidator::validateMaxScanDays(config('workdays.max_scan_days', 3660));
+            $limit = ProfileConfigValidator::validateMaxScanDays($this->scanSettings === null ? config('workdays.max_scan_days', 3660) : $this->scanSettings['max_scan_days']);
         } catch (InvalidArgumentException $exception) {
             throw new WorkdayConfigurationException('Invalid delivery planning horizon: '.$exception->getMessage(), previous: $exception);
         }

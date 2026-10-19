@@ -33,7 +33,7 @@ final readonly class SlaEvaluator
      * @param  callable(string, int): BusinessDayCalculator  $resolveCalculator
      * @param  null|callable(string): array<string, mixed>  $resolveProfileConfig
      */
-    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null)
+    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null, private ?array $scanSettings = null)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
         $this->resolveProfileConfig = $resolveProfileConfig === null ? null : Closure::fromCallable($resolveProfileConfig);
@@ -58,7 +58,7 @@ final readonly class SlaEvaluator
         [$pauses, $paused] = $this->pauses($options['pauses'] ?? [], $timezone, $start, $evaluation);
 
         try {
-            $limit = ProfileConfigValidator::validateMaxScanDays(config('workdays.max_scan_days', 3660));
+            $limit = ProfileConfigValidator::validateMaxScanDays($this->scanSettings === null ? config('workdays.max_scan_days', 3660) : $this->scanSettings['max_scan_days']);
             $calculator = ($this->resolveCalculator)($profile, $limit);
             $effective = $this->profileConfig($profile);
 
