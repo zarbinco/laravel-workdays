@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added opt-in calendar-eligible delivery and pickup intervals through `Workday::deliverySlots()` and `WorkdayManager`, with immutable UTC `DeliverySlotsResult` and `DeliverySlot` objects and explicit local serialization.
+- Added strict slot-policy validation, elapsed notice buffers, working-window-aligned grids, bounded local-date searches, result limits, and conservative timezone-transition handling using existing profile calendars and holiday providers.
+- Added Phase 02 readiness integration, focused slot/calendar/storage/timezone and compatibility coverage, and aligned English/Persian usage, application responsibilities, limitations, and manual verification documentation.
 - Added opt-in multi-stage delivery estimates through `Workday::planDelivery()` and `WorkdayManager`, with immutable UTC `DeliveryPlanResult` and `DeliveryStageResult` objects.
 - Added profile-local working-minute stages, simultaneous two-profile handoffs, strictly future business-date lead times, optional reuse of order cut-off routing, and one global planning horizon.
 - Added strict delivery-plan validation and timestamp handling, per-invocation calculator reuse, focused calendar/storage/timezone integration tests, and aligned English/Persian configuration, store integration, result, and manual verification documentation.

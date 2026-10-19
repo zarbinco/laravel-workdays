@@ -13,8 +13,10 @@ use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
+use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
+use Zarbinco\LaravelWorkdays\Delivery\DeliverySlotGenerator;
 use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
@@ -67,6 +69,14 @@ final class WorkdayManager
         return (new DeliveryPlanner(
             fn (string $profile, int $scanLimit): BusinessDayCalculator => $this->calculator($profile, $scanLimit),
         ))->plan($receivedAt, $plan);
+    }
+
+    /**
+     * @param  array<string, mixed>  $options
+     */
+    public function deliverySlots(string|DateTimeInterface $readyAt, array $options): DeliverySlotsResult
+    {
+        return (new DeliverySlotGenerator($this->profile(...)))->generate($readyAt, $options);
     }
 
     public function explain(string|DateTimeInterface $date): DayInfo

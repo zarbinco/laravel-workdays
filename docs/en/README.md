@@ -897,6 +897,191 @@ In B and C, the carrier opens at 12:00 when the warehouse closes for lunch. The 
 - F: restore the original UTC fixture and use a handoff-only plan. Input June 29 at 13:00 hands off immediately; 12:00 waits until 13:00 because the warehouse is at lunch; 17:00 rolls to June 30 at 13:00. A 60-minute warehouse work stage starting at 16:00 may complete at 17:00, but its following pickup must also wait until June 30 at 13:00.
 - G: add July 4 as an `extra_working_days` date to warehouse and carrier, with `extra_working_day_hours => [['09:00', '17:00']]` on both. Without cutoff, a plan containing 60 warehouse work minutes then handoff, received July 4 at 08:00 UTC, starts at 09:00 and completes both work and handoff at 10:00. Remove the fixture overrides after checking.
 
+## Delivery And Pickup Time Slots
+
+`Workday::deliverySlots($readyAt, $options)` generates customer-selectable delivery, collection, or return drop-off intervals from one serving profile's calendar and working hours. For an online store, calculate when an item will be ready, generate eligible checkout intervals, then apply your application's capacity and booking checks.
+
+A generated slot is **calendar-eligible**, not guaranteed booking availability. Selecting one does not create an order, appointment, or reservation. Revalidate calendar eligibility before booking; capacity, transactional reservation, concurrent booking protection, slot IDs, booking references, and appointment records belong to the consuming application. There is no automatic carrier API integration.
+
+The API is opt-in, available on the facade and `WorkdayManager`, and requires no cutoff policy, new profile keys, database tables, or Composer dependencies. Call it on the manager/facade; each call evaluates one explicit profile. It does not add a profile-calculator alias or Carbon macro.
+
+### Complete Usage And Local Test Profile
+
+Run this dedicated fixture in a local Laravel application with `php artisan tinker`. These session-only settings use config storage and do not write holiday or booking records. Keep a copy of the existing config to restore after the checks.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$slotOriginalConfig = config('workdays');
+$slotWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$slotHours = array_fill_keys($slotWeekdays, [
+    ['09:00', '12:00'],
+    ['13:00', '17:00'],
+]);
+$slotCalendar = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [],
+    'extra_working_days' => [],
+];
+$slotProfile = array_replace($slotCalendar, ['working_hours' => $slotHours]);
+
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 14,
+    'workdays.profiles.slots-demo' => $slotProfile,
+]);
+
+$options = [
+    'profile' => 'slots-demo',
+    'timezone' => 'UTC',
+    'days' => 2,
+    'duration_minutes' => 120,
+    'step_minutes' => 60,
+    'min_notice_minutes' => 0,
+    'max_slots' => 10,
+];
+
+$result = Workday::deliverySlots('2026-06-29T10:30:00Z', $options);
+$result->readyAt;
+$result->eligibleFromAt;
+$result->slots;
+$result->toArray();
+
+// The same API without the facade:
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)
+    ->deliverySlots('2026-06-29T10:30:00Z', $options);
+```
+
+This returns eight slots: June 29 at 13:00–15:00, 14:00–16:00, and 15:00–17:00; June 30 at 09:00–11:00, 10:00–12:00, 13:00–15:00, 14:00–16:00, and 15:00–17:00. Dates and times in this fixture are UTC.
+
+### Options And Validation
+
+| Key | Requirement / default | Accepted value |
+|---|---|---|
+| `profile` | Required | Non-empty name of an existing configured profile with valid `working_hours`. |
+| `timezone` | Required | IANA timezone identifier such as `Asia/Tehran`, `America/New_York`, or `UTC`; a numeric offset is not a profile timezone. |
+| `days` | Required | PHP integer `1`–`31`, additionally requiring `days - 1 <= workdays.max_scan_days`. |
+| `duration_minutes` | Required | PHP integer `1`–`1439`; actual elapsed length of each slot. |
+| `step_minutes` | Required | PHP integer `1`–`1439`; spacing between candidate starts within each window. |
+| `min_notice_minutes` | Optional; `0` | Non-negative PHP integer; additional elapsed minutes after readiness. |
+| `max_slots` | Optional; `50` | PHP integer `1`–`200`; maximum returned intervals. |
+
+Unknown keys and profiles, missing required keys, malformed hours, invalid timezones, and invalid values throw `Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException`. Integer options are strict: numeric strings, floats, booleans, and explicit `null` are rejected. Omit an optional key to use its default. `workdays.max_scan_days` must retain its existing positive-integer configuration. Slot-specific options are validated only when this API is called; ordinary calculators do not require slot configuration.
+
+### Readiness, Notice, And Calendar Dates
+
+Always supply `readyAt` explicitly; the generator never substitutes `now()`. It is the earliest operationally ready instant provided by your application. It may come from your own calculation, a meaningful Phase 02 readiness stage's `completedAt`, or `estimatedCompletionAt` from a plan intentionally ending at readiness. A plan ending after final delivery processing is not automatically an appropriate readiness plan.
+
+The accepted type is `string|\DateTimeInterface`. Strict absolute string formats follow the cutoff timestamp formats: space-separated `Y-m-d H:i[:s[.microseconds]]`, or ISO `T` timestamps with `Z`/`±HH:MM`. A fraction has 1–6 digits and requires seconds. Naive strings use the supplied profile `timezone`; offset-bearing timestamps and date objects preserve their actual instant. Empty, relative, date-only, impossible-date, invalid-offset, nonexistent local, and ambiguous naive local timestamps throw `InvalidArgumentException`. Supply an explicit offset or a `DateTimeInterface` instant to disambiguate a repeated local hour. Caller-provided mutable objects are not changed.
+
+`eligibleFromAt = readyAt + min_notice_minutes` on the UTC timeline. The buffer is applied once, using elapsed minutes, including closed hours. It neither counts business minutes nor repeats preparation. If preparation must consume business time, perform it in Phase 02 first. A candidate start must be at or after this threshold; seconds and microseconds are compared without rounding backward. Readiness at 09:00 permits a 09:00 start; readiness at 09:00:00.000001 excludes it.
+
+There is no arbitrary policy maximum for this non-negative integer buffer, but the resulting timestamp must fit the runtime's DateTime and integer range. An unrepresentable buffer throws `WorkdayConfigurationException`; a representable large buffer beyond the requested dates retains its exact eligibility threshold and returns no slots.
+
+`days` counts local calendar-date labels anchored to `readyAt`, including its initial date. Seven means day 0 through day 6, regardless of weekends, holidays, or the notice buffer. The request never extends to collect seven business dates. A buffer pushing eligibility outside these dates produces an empty list. Entirely skipped civil dates consume a requested date label and provide no slots; they do not extend the range.
+
+Supply the actual service calendar's timezone consistently with your Phase 02 `profile_timezones` mapping. The generator never infers it from Laravel's application timezone. All comparisons and ordering use UTC instants; the requested date range uses that explicit profile timezone.
+
+### Boundaries, Alignment, And Calendars
+
+Every slot is half-open, `[start, end)`, and fits wholly inside one working window on one requested local date. It can start at opening and end exactly at closing; it cannot start at closing, bridge lunch, cross into the next window, or cross a local date. With 09:00–12:00 and 13:00–17:00, two-hour slots 10:00–12:00 and 15:00–17:00 are valid; 11:00–13:00, 12:00–14:00, and 16:00–18:00 are invalid.
+
+Candidate starts follow each window's own opening plus `n * step_minutes`. The grid restarts at an afternoon opening. Readiness filters this fixed grid; it does not shift the grid to arbitrary input seconds. For example, a 90-minute notice after 08:00 gives 09:30 eligibility and a first two-hour slot of 10:00–12:00. Different requests seconds apart retain the same aligned starts. Step may be shorter than duration, so returned choices can overlap each other; they are alternative intervals, not reserved appointments.
+
+The generator reuses `workingWindowsFor()` and one calculator per call. Existing weekend, recurring Gregorian/Jalali/Hijri holiday, exact holiday, config/database/chain, half-day, split-window, and extra-working-day precedence is preserved. An extra working day uses its weekday hours, or `extra_working_day_hours` when that weekday has none; missing both remains a configuration error. `isBusinessDay()` keeps its day-level meaning independent of opening hours.
+
+At most `days` date labels are considered, windows are retrieved once per existing scanned date, and candidates advance by the configured step. Results are unique and chronological, and generation stops at `max_slots`. No global or persistent cache is added. Valid searches containing only holidays, closed dates, or windows shorter than the duration return an empty `slots` list.
+
+### Conservative Timezone Transition Policy
+
+Candidate boundaries are formed from local wall-clock dates and times, then checked before conversion to immutable UTC. Nonexistent or ambiguous slot start/end boundaries are skipped; a missing 02:30 is never silently shifted to 03:30. Slots crossing a timezone offset transition are skipped. Valid unambiguous candidates before or after the transition remain usable, provided their actual elapsed duration equals `duration_minutes` and they stay inside the window. A fully skipped civil date, such as `Pacific/Apia` on December 30, 2011, generates no phantom slots.
+
+This conservative policy intentionally offers fewer choices around transitions. It does not implement overnight shifts or a generalized DST scheduling engine. Results are deterministic for the same inputs, calendar data, and timezone database.
+
+### Phase 02 Readiness Integration
+
+This local example intentionally ends when warehouse preparation is complete. It does not include transit or final delivery processing. Both serving calendars use Tehran time; no additional notice or cutoff is applied by the slot generator.
+
+```php
+config([
+    'workdays.profiles.readiness-demo' => $slotProfile,
+    'workdays.profiles.pickup-demo' => $slotProfile,
+]);
+
+$readinessStagesPlan = [
+    'timezone' => 'Asia/Tehran',
+    'profile_timezones' => ['readiness-demo' => 'Asia/Tehran'],
+    'stages' => [
+        ['id' => 'ready_for_collection', 'type' => 'work', 'profile' => 'readiness-demo', 'minutes' => 120],
+    ],
+];
+
+$readinessPlan = Workday::planDelivery(
+    '2026-06-29 10:30',
+    $readinessStagesPlan,
+);
+// Preparation pauses at lunch and finishes at 13:30 Tehran / 10:00 UTC.
+
+$pickupSlots = Workday::deliverySlots($readinessPlan->estimatedCompletionAt, [
+    'profile' => 'pickup-demo',
+    'timezone' => 'Asia/Tehran',
+    'days' => 7,
+    'duration_minutes' => 120,
+    'step_minutes' => 60,
+    'min_notice_minutes' => 0,
+    'max_slots' => 20,
+]);
+// First choice: 14:00–16:00 Tehran / 10:30–12:30 UTC.
+```
+
+No slot begins before the supplied preparation completion. `planDelivery()` and `deliverySlots()` retain separate result contracts. If your readiness plan explicitly uses cutoff routing, it happens there; slot generation does not reapply it or add the work stage again.
+
+### Results And Serialization
+
+`Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult` and `DeliverySlot` are immutable value objects. The former exposes:
+
+| Property | Serialized key | Meaning |
+|---|---|---|
+| `profile` | `profile` | Selected configured profile. |
+| `timezone` | `timezone` | Captured local service timezone. |
+| `readyAt` | `ready_at` | Original readiness instant as UTC `CarbonImmutable`. |
+| `eligibleFromAt` | `eligible_from_at` | UTC `CarbonImmutable` after the elapsed notice buffer. |
+| `requestedDays` | `requested_days` | Requested local calendar-date count. |
+| `slots` | `slots` | Ordered list of immutable `DeliverySlot` objects, or `[]`. |
+
+Each slot exposes UTC `CarbonImmutable` properties `startsAt` and `endsAt`. Its `toArray()` derives local boundaries using the captured service timezone. For the first UTC fixture slot:
+
+```php
+$result->slots[0]->toArray();
+// [
+//     'starts_at' => '2026-06-29T13:00:00.000000+00:00',
+//     'ends_at' => '2026-06-29T15:00:00.000000+00:00',
+//     'local_starts_at' => '2026-06-29T13:00:00.000000+00:00',
+//     'local_ends_at' => '2026-06-29T15:00:00.000000+00:00',
+// ]
+```
+
+All serialized timestamps use `Y-m-d\TH:i:s.uP`, six microsecond digits, and explicit offsets, including `+00:00` for UTC. Local fields include their actual offset; the Tehran integration's first `local_starts_at` is `2026-06-29T14:00:00.000000+03:30`. Result `toArray()` uses the table's stable snake_case keys and serializes every slot. Empty valid results still include readiness, eligibility, profile, timezone, requested days, and `'slots' => []`. Later caller-object or config changes do not mutate an existing result.
+
+### Manual Verification And Responsibilities
+
+Use the dedicated Tinker fixture above, restoring `workdays.profiles.slots-demo` to `$slotProfile` and `$options` to the original values between cases. All dates below are in 2026 and all times are UTC unless stated.
+
+| Check | Change / input | Expected outcome |
+|---|---|---|
+| A: split windows | Original fixture; June 29, 10:30 | First choices 13:00–15:00, 14:00–16:00, 15:00–17:00; eight total across two dates; none bridge lunch. |
+| B: notice | June 29, 08:00; set `min_notice_minutes` to `90` | Eligibility 09:30; first choice 10:00–12:00. |
+| C: exact boundaries | June 29, 09:00, then 09:00:00.000001 | 09:00–11:00 appears only for the first input; 10:00–12:00 and 15:00–17:00 may end at closing, and no start equals a closing. |
+| D: holiday/weekend | Set `custom_holidays` to `['2026-07-03' => 'Test holiday']`; input July 2, 17:00; `days = 5` | No Friday/weekend choices; first slot is Monday July 6, 09:00–11:00. |
+| E: half-day | Replace Thursday hours with `[['09:00', '12:00']]`; input July 2, 08:00; `days = 1` | Exactly 09:00–11:00 and 10:00–12:00. |
+| F: extra working day | Set `extra_working_days` to `['2026-07-04' => 'Test working day']` and `extra_working_day_hours` to `[['10:00', '14:00']]`; input July 4, 08:00; `days = 1` | 10:00–12:00, 11:00–13:00, 12:00–14:00. Removing fallback hours yields the existing missing-hours configuration error. |
+| G: short window | Replace Monday hours with `[['09:00', '10:00']]`; input June 29, 08:00; `days = 1` | Empty `slots`, with no exception. |
+
+Run the readiness integration and confirm every slot begins at or after its plan's completion. Inspect UTC and local fields, and confirm these calls create no booking, reservation, database write, or notification. Restore the session's settings with `config(['workdays' => $slotOriginalConfig]);`. Use test-only config and calendars rather than modifying production holiday records.
+
+The application must revalidate eligibility and remaining capacity during booking, enforce its own transactional reservation and concurrency rules, and decide what customer promise it can make. This phase evaluates one serving profile per call; whole-interval availability intersection across multiple profiles is outside its scope. Date-specific opening-hour exceptions and overnight shifts are planned separately. No frontend, routes, controllers, notifications, background jobs, order models, shipment models, or booking storage are added.
+
 ## Carbon Macros
 
 Carbon macros are enabled by default for `Carbon\Carbon`, `Carbon\CarbonImmutable`, and naturally for `Illuminate\Support\Carbon`.
@@ -1033,6 +1218,7 @@ Workday::profile('global')->diffBusinessDays($startDate, $endDate);
 Workday::profile('global')->calculate($date, 5);
 Workday::profile('warehouse')->resolveCutoff($receivedAt);
 Workday::planDelivery($receivedAt, $plan);
+Workday::deliverySlots($readyAt, $options);
 ```
 
 `isHoliday()` means non-working day. It includes weekends, recurring calendar holidays, and exact custom holidays unless an extra working day override exists.
