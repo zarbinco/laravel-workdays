@@ -18,6 +18,7 @@ use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseComparison;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
 use Zarbinco\LaravelWorkdays\Data\ResolvedProfile;
+use Zarbinco\LaravelWorkdays\Data\SlaResult;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
 use Zarbinco\LaravelWorkdays\Delivery\DeliverySlotGenerator;
@@ -25,6 +26,7 @@ use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
+use Zarbinco\LaravelWorkdays\Sla\SlaEvaluator;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
 use Zarbinco\LaravelWorkdays\Support\ProfileRouter;
@@ -136,6 +138,27 @@ final class WorkdayManager
     public function compareDeliveryPromise(DeliveryPromiseSnapshot|array $snapshot): DeliveryPromiseComparison
     {
         return (new DeliveryPromiseAuditor)->compare($snapshot);
+    }
+
+    /** @param array<string, mixed> $options */
+    public function evaluateSla(string|DateTimeInterface $startedAt, string|DateTimeInterface $evaluatedAt, array $options): SlaResult
+    {
+        $profiles = null;
+        $effective = null;
+        $resolveConfig = function (string $profile) use (&$profiles, &$effective): array {
+            $profiles ??= $this->profiles();
+
+            return $effective ??= $this->effectiveProfileConfig($profile, $profiles);
+        };
+
+        return (new SlaEvaluator(
+            function (string $profile, int $limit) use ($resolveConfig, &$profiles): BusinessDayCalculator {
+                $profileConfig = $resolveConfig($profile);
+
+                return $this->calculator($profile, $limit, $profileConfig, $profiles);
+            },
+            $resolveConfig,
+        ))->evaluate($startedAt, $evaluatedAt, $options);
     }
 
     /**

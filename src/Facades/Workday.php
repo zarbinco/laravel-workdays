@@ -15,6 +15,7 @@ use Zarbinco\LaravelWorkdays\WorkdayManager;
  * @method static \Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult planDelivery(string|\DateTimeInterface $receivedAt, array $plan)
  * @method static \Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot captureDeliveryPromise(string|\DateTimeInterface $receivedAt, array $plan, array $options)
  * @method static \Zarbinco\LaravelWorkdays\Data\DeliveryPromiseComparison compareDeliveryPromise(\Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot|array $snapshot)
+ * @method static \Zarbinco\LaravelWorkdays\Data\SlaResult evaluateSla(string|\DateTimeInterface $startedAt, string|\DateTimeInterface $evaluatedAt, array $options)
  * @method static \Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult deliverySlots(string|\DateTimeInterface $readyAt, array $options)
  * @method static \Zarbinco\LaravelWorkdays\Data\DayInfo explain(string|\DateTimeInterface $date)
  * @method static bool isBusinessDay(string|\DateTimeInterface $date)

@@ -1672,6 +1672,227 @@ Run the readiness integration and confirm every slot begins at or after its plan
 
 The application must revalidate eligibility and remaining capacity during booking, enforce its own transactional reservation and concurrency rules, and decide what customer promise it can make. This phase evaluates one serving profile per call; whole-interval availability intersection across multiple profiles is outside its scope. Special/seasonal hours and overnight shifts are available through optional profile settings; slots remain inside their effective daily windows. No frontend, routes, controllers, notifications, background jobs, order models, shipment models, or booking storage are added.
 
+## Business SLA Evaluation And Pause/Resume
+
+`Workday::evaluateSla($startedAt, $evaluatedAt, $options)` calculates an SLA's consumed working time, remaining budget, deadline, and breach status. For example, a store can allow four working hours to review a customer's return request while excluding an approved wait for customer documents. Working minutes consume eligible opening hours; calendar minutes also include lunch, closed evenings, weekends, and holidays.
+
+This is a pure calculation, not a stored ticket/workflow state. The application decides when an SLA starts, which pauses are allowed and why, when each pause ends, whether a ticket is completed, and what escalation or notification to send. The package does not monitor tickets, start timers, schedule reminders, persist pause records, or change return requests.
+
+The opt-in API is available on the facade and `WorkdayManager`, returning an immutable `Zarbinco\LaravelWorkdays\Data\SlaResult`. A configured profile with valid working hours needs no SLA-specific profile settings. No aliases, Carbon macros, tables, jobs, or Composer dependencies are added.
+
+### Dedicated Tinker Fixture And Complete Usage
+
+Run this config-only fixture in a local `php artisan tinker` session. It defines ordinary, inherited, split-window, and overnight support calendars and preserves the original config for restoration. All example dates are in 2026.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$slaOriginalConfig = config('workdays');
+$slaWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$slaBase = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [],
+    'extra_working_days' => [],
+    'working_hours' => array_fill_keys($slaWeekdays, [['09:00', '17:00']]),
+];
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 14,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), [
+        'sla_support_base' => $slaBase,
+        'sla_support' => [
+            'extends' => 'sla_support_base',
+            'working_hours' => ['Thursday' => [['09:00', '20:00']]],
+        ],
+        'customer_support' => ['extends' => 'sla_support'],
+        'sla_split' => [
+            'extends' => 'sla_support_base',
+            'working_hours' => array_fill_keys($slaWeekdays, [['09:00', '12:00'], ['13:00', '17:00']]),
+        ],
+        'sla_night' => [
+            'extends' => 'sla_support_base',
+            'allow_overnight_working_hours' => true,
+            'working_hours' => [
+                'Monday' => [['22:00', '06:00']],
+                'Tuesday' => [], 'Wednesday' => [], 'Thursday' => [],
+                'Friday' => [['22:00', '06:00']],
+            ],
+        ],
+    ]),
+]);
+
+$slaStartedAt = '2026-11-02T15:00:00Z';
+$slaOptions = ['profile' => 'sla_support', 'timezone' => 'UTC', 'target_minutes' => 240];
+$withoutPause = Workday::evaluateSla($slaStartedAt, '2026-11-03T10:30:00Z', $slaOptions);
+// dueAt November 3, 11:00 UTC; consumed=210, remaining=30, status=active.
+
+$closedPauses = [['started_at' => '2026-11-03T10:00:00Z', 'ended_at' => '2026-11-03T11:00:00Z']];
+$withPause = Workday::evaluateSla($slaStartedAt, '2026-11-03T11:30:00Z', array_replace(
+    $slaOptions,
+    ['pauses' => $closedPauses],
+));
+// dueAt November 3, 12:00 UTC; consumed=210, paused=60, remaining=30.
+$withPause->toArray();
+
+// The same API without the facade:
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)
+    ->evaluateSla($slaStartedAt, '2026-11-03T11:30:00Z', array_replace($slaOptions, ['pauses' => $closedPauses]));
+```
+
+### Options, Timestamps, And Errors
+
+| Option | Requirement / default | Accepted value |
+|---|---|---|
+| `profile` | Required | Non-empty configured profile name with valid working hours; inheritance is supported. |
+| `timezone` | Required | Explicit IANA service-calendar timezone, such as `UTC` or `Asia/Tehran`; no inference from the server or application timezone. |
+| `target_minutes` | Required | Strict PHP integer `1`–`1,000,000`, representing an exact working-time budget. |
+| `pauses` | Optional; `[]` | Ordered-list structure containing at most `1,000` submitted pause arrays; input order may be arbitrary. Each array has exactly `started_at` and `ended_at`. |
+
+Unknown options, missing required values, numeric strings, floats, booleans, explicit null option values, malformed containers/shapes, and invalid profile settings are rejected with `WorkdayConfigurationException`. Only a pause's `ended_at` may be null. Invalid timestamps, interval chronology, or multiple ongoing pauses throw `InvalidArgumentException`. A finite calculation that cannot fit the configured horizon throws a profile/limit-specific `RuntimeException`.
+
+Both main timestamps are mandatory; the engine never substitutes `now()`. `evaluatedAt` must be at or after `startedAt`. Main and pause timestamps accept `string|\DateTimeInterface` using the existing strict absolute formats: naive space-separated `Y-m-d H:i[:s[.microseconds]]`, or ISO `T` timestamps with `Z`/`±HH:MM`; a fraction has 1–6 digits and requires seconds. Naive strings use the explicit `timezone`. Offset-bearing inputs/date objects preserve their instant, and mutable caller objects are not modified. Internally and in results, instants are immutable UTC values with seconds and microseconds preserved.
+
+Empty or relative strings, date-only input, impossible Gregorian dates, malformed offsets, nonexistent local times, and ambiguous naive DST-fold times are rejected. Supply an explicit offset or `DateTimeInterface` instant to select a repeated local-time occurrence. These SLA parsing rules do not change the older APIs' parsing contracts.
+
+Every pause must start at or after the SLA start and no later than evaluation. A closed pause must end strictly after its start and no later than evaluation; future scheduled pauses and zero-length closed pauses are invalid. At most one pause may remain open. The `1,000` limit applies before normalization, including duplicate submitted intervals.
+
+### Working Windows And Pause Rules
+
+The selected calculator's `workingWindowsFor()` remains authoritative. SLA accounting respects config/database/chain precedence, Gregorian/Jalali/Hijri and exact holidays, extra working days, half-days, lunch breaks, special-date/seasonal hours, inherited settings, and overnight fragments. Calendar predicates keep their existing meanings. A valid overnight carry-in may consume SLA time on a receiving weekend/holiday even though that date is not a business date. No cutoff policy or additional warehouse preparation is automatically applied.
+
+Pauses are half-open `[started_at, ended_at)`: their start stops eligible consumption, and their end permits it again. Unsorted, duplicate, overlapping, and touching pauses are normalized into their union once. For example, 10:00–10:45 and 10:30–11:00 exclude one 10:00–11:00 interval, not 75 minutes. Equivalent offset-bearing instants remain the same instants.
+
+Only intersections with working windows contribute `pausedWorkingMinutes`. A pause from 18:00–22:00 has no effect when work ends at 17:00. With 09:00–12:00 and 13:00–17:00 windows, an 11:30–13:30 pause excludes 60 working minutes: 30 before lunch and 30 after it. A weekend-spanning pause similarly excludes only otherwise eligible working time.
+
+The deadline is the first instant at which cumulative eligible, unpaused time reaches the target. It is calculated chronologically through working intervals; wall-clock pause lengths are not simply added to an old deadline. Once that budget has been reached, a later pause cannot move the established deadline or undo the breach. Paused working-time metrics still include all eligible pause intersections through evaluation, including those after the deadline.
+
+### Ongoing Pauses And Resuming
+
+An `ended_at => null` pause remains active at evaluation. Its elapsed portion is excluded through `evaluatedAt`, but its future end is unknown. If the budget has not already been reached, `dueAt` is null; evaluation does not silently resume the SLA. The application resumes it by closing that same pause with the actual end instant and evaluating again.
+
+```php
+$openPauses = [['started_at' => '2026-11-03T10:00:00Z', 'ended_at' => null]];
+$pausedSla = Workday::evaluateSla($slaStartedAt, '2026-11-03T11:30:00Z', array_replace(
+    $slaOptions,
+    ['pauses' => $openPauses],
+));
+// dueAt=null; consumed=180, paused=90, remaining=60; status=paused.
+
+$openPauses[0]['ended_at'] = '2026-11-03T11:30:00Z';
+$resumedSla = Workday::evaluateSla($slaStartedAt, '2026-11-03T12:00:00Z', array_replace(
+    $slaOptions,
+    ['pauses' => $openPauses],
+));
+// Real resume at 11:30: dueAt=12:30; consumed=210, paused=90, remaining=30.
+
+$atDeadline = Workday::evaluateSla($slaStartedAt, '2026-11-03T11:00:00.000000Z', $slaOptions);
+$afterDeadline = Workday::evaluateSla($slaStartedAt, '2026-11-03T11:00:00.000001Z', $slaOptions);
+// Exactly due: breached=false, remaining=0. One microsecond later: breached=true.
+
+$latePause = Workday::evaluateSla($slaStartedAt, '2026-11-03T12:00:00Z', array_replace(
+    $slaOptions,
+    ['target_minutes' => 60, 'pauses' => [['started_at' => '2026-11-03T10:00:00Z', 'ended_at' => null]]],
+));
+// dueAt remains November 2, 16:00; paused=true, breached=true, status=breached.
+```
+
+A pause starting exactly when the budget is reached also retains that known deadline. With no ongoing pause, a not-yet-expired SLA projects remaining working time forward assuming no new future pauses. Later genuine pause records can change that projection. An ongoing pause may legitimately return an unknown due date without scanning indefinitely; an already-known deadline remains available even if the SLA is now paused.
+
+### Exact Breach Status And Minute Precision
+
+The stable statuses have this priority: `breached` when `evaluatedAt > dueAt`; otherwise `paused` when an open pause is active; otherwise `active`. There is no package-level completed/cancelled ticket status. `paused` and `breached` are separate flags and can both be true.
+
+At exactly `dueAt`, breach is false and remaining minutes are zero. One microsecond later breach is true, including when the deadline was exactly at closing and no further working time has elapsed. For example, a 120-minute SLA starting Monday at 15:00 is due at 17:00; evaluation at 17:00:00.000001 is breached even though overdue working minutes are still zero.
+
+The evaluator accumulates exact eligible microseconds on 64-bit PHP, unions pauses, and applies rounding only to final totals:
+
+| Result duration | Rounding / meaning |
+|---|---|
+| Consumed working minutes | Floor all active eligible time through evaluation, including time beyond the budget. |
+| Paused working minutes | Floor all paused eligible time through evaluation. |
+| Remaining working minutes | Ceiling of positive unconsumed budget; never negative. |
+| Overdue working minutes | Floor positive active-time overage beyond the budget; zero outside additional working time. |
+
+Individual windows and pauses are not rounded independently. A fraction of a minute can therefore produce one remaining minute, or a true breach with zero overdue whole minutes. Breach uses the actual deadline instant, not rounded totals. Existing legacy minute/hour calculations retain their historical precision and are not rewritten for this API.
+
+### Shared Horizon And Timezone Boundaries
+
+`workdays.max_scan_days` is the number of allowed future profile-local calendar-date labels measured from the SLA's start date, day zero. Its final date is inclusive. Pauses, resumption, later windows, and projection do not restart the horizon. Skipped civil dates consume labels without extending it. Evaluation outside the permitted local dates is an error, even if a pause is open.
+
+A finite deadline must land on an allowed date. A `24:00` working-window end is next local midnight, so a deadline at midnight after the final allowed date is outside this SLA horizon. If no finite deadline is available within the bound, the evaluator throws instead of inventing one. A valid ongoing pause with an unknown future resume can return `dueAt = null`, provided evaluation itself is within the bound.
+
+Window boundaries use actual profile-local dates and UTC instants, not fixed 86,400-second days. Existing enhanced-schedule policies for nonexistent/ambiguous boundaries, skipped midnight, and skipped civil dates remain in force. Valid spring-forward/fall-back overnight shifts consume their real elapsed time. Use an explicit service-calendar timezone consistently; routing selects a profile name and does not infer its timezone.
+
+### Results And Serialization
+
+`SlaResult` exposes the following immutable values and stable snake_case fields. In the one-hour closed-pause example, the target is 240, consumed 210, paused 60, remaining 30, overdue 0, and the deadline is Tuesday 12:00 UTC.
+
+| Property | Serialized key | Meaning |
+|---|---|---|
+| `profile` | `profile` | Selected configured profile name. |
+| `timezone` | `timezone` | Explicit local calendar timezone. |
+| `startedAt` | `started_at` | Original start as UTC `CarbonImmutable`. |
+| `evaluatedAt` | `evaluated_at` | Evaluation instant as UTC `CarbonImmutable`. |
+| `targetMinutes` | `target_minutes` | Exact integer working-minute budget. |
+| `consumedWorkingMinutes` | `consumed_working_minutes` | Floored active working minutes. |
+| `pausedWorkingMinutes` | `paused_working_minutes` | Floored paused working minutes. |
+| `remainingWorkingMinutes` | `remaining_working_minutes` | Ceiled non-negative remainder. |
+| `overdueWorkingMinutes` | `overdue_working_minutes` | Floored non-negative active overage. |
+| `dueAt` | `due_at` | UTC `CarbonImmutable`, or null only for a genuinely unknown ongoing-pause deadline. |
+| `paused` | `paused` | Whether an ongoing pause exists at evaluation. |
+| `breached` | `breached` | Whether evaluation is strictly after a known deadline. |
+| `status` | `status` | `active`, `paused`, or `breached`, using the priority above. |
+
+`toArray()` is JSON-compatible. All non-null timestamps use `Y-m-d\TH:i:s.uP`, six microsecond digits, and explicit `+00:00`; for example, `2026-11-03T12:00:00.000000+00:00`. The result does not retain mutable caller objects or add customer-specific data. Identical inputs and effective calendar rules produce identical results.
+
+### Return-Request Integration And Responsibilities
+
+This application integration example assumes the named profile already exists. The application explicitly chooses the evaluation instant; passing `now()` here is its decision, while deterministic recalculation can use a recorded instant instead.
+
+```php
+$result = Workday::evaluateSla(
+    $returnRequest->created_at,
+    now(),
+    [
+        'profile' => 'customer_support',
+        'timezone' => 'Asia/Tehran',
+        'target_minutes' => 240,
+        'pauses' => [['started_at' => $pauseStartedAt, 'ended_at' => $pauseEndedAt]],
+    ],
+);
+if ($result->breached) {
+    // The application decides whether to escalate or notify; this call sends nothing.
+}
+```
+
+The application records allowed pause reasons and timestamps, controls access, and manages completed/cancelled states. It may resolve a profile first with `resolveProfile($context)` and pass `$selection->profile`; `evaluateSla()` does not reroute context internally. Inheritance and child-specific database identity follow Phase 05: parent database holiday rows are not automatically inherited. Config/database/chain provider precedence remains unchanged.
+
+One calculator/effective configuration is reused per evaluation, pauses are normalized once, and scanning advances through bounded dates/windows and pause boundaries rather than every minute. Date windows are reused within the operation; providers are not reconstructed inside scanning loops or queried for every pause fragment. Deadline search stops when the budget is reached, while accounting continues through evaluation as needed for consumed/overdue metrics. No global or persistent cache is introduced, and ordinary API performance is unchanged.
+
+The SLA engine runs only when explicitly called. It does not change existing calculators, timestamp parsers, result objects, or Phase 06 snapshot schemas/fingerprints. Recalculation uses the supplied pauses and effective calendar rules; storing historical SLA results or applying escalation policies remains application work.
+
+### Twelve Manual Checks
+
+Use the dedicated UTC fixture above, keeping production records untouched. Restore a profile's test config between calendar variants.
+
+| Check | Action | Expected result |
+|---|---|---|
+| 1. Support hours | Inspect the base/inherited fixture. | Monday–Friday 09:00–17:00; the child explicitly extends Thursday to 20:00. |
+| 2. Start | Use `$slaStartedAt`. | Monday November 2, 15:00 UTC; explicitly supplied. |
+| 3. Budget | Use `$slaOptions`. | Exactly 240 working minutes. |
+| 4. Original deadline | Inspect `$withoutPause`. | Tuesday November 3, 11:00; at 10:30 consumed 210 and remaining 30. |
+| 5. Closed pause | Add `$closedPauses`. | Tuesday 10:00–11:00, wholly historical at evaluation. |
+| 6. Adjusted deadline | Inspect `$withPause->dueAt`. | Tuesday 12:00; only eligible paused time changes it. |
+| 7. Remaining time | Inspect `$withPause` at 11:30; optionally supply overlapping 10:00–10:45 / 10:30–11:00 pauses. | Consumed 210, paused 60, remaining 30; overlap gives the same result. |
+| 8. Exact boundary | Inspect `$atDeadline` / `$afterDeadline`; repeat the 120-minute closing example. | Exactly due is not breached; one microsecond later is breached, including just after closing. |
+| 9. Ongoing pause | Inspect `$pausedSla`. | Null due date; consumed 180, paused 90, remaining 60; status `paused`. |
+| 10. Real resume | Inspect `$resumedSla`; inspect `$latePause` too. | Actual resume gives 12:30; late pause keeps the old deadline and breach despite `paused=true`. |
+| 11. Calendar variants | Add base `custom_holidays => ['2026-11-03' => 'Test holiday']`, then evaluate the no-pause case; restore it and evaluate `sla_night` from Monday 23:00 with target 180 and pause 23:30–Tuesday 00:30. | Holiday moves due time to Wednesday 11:00; the overnight pause gives Tuesday 03:00. Evaluate after each closed pause has ended. |
+| 12. Side effects | Inspect application state after these config-only calls. | No database write, job, notification, reservation, or ticket-state mutation. |
+
+For the split-window profile, also verify that an 11:30–13:30 pause counts only 60 paused working minutes. Restore the session with `config(['workdays' => $slaOriginalConfig]);`. The package supplies calculations; your application decides whether any workflow transition, reminder, or escalation should follow.
+
 ## Carbon Macros
 
 Carbon macros are enabled by default for `Carbon\Carbon`, `Carbon\CarbonImmutable`, and naturally for `Illuminate\Support\Carbon`.
@@ -1813,6 +2034,7 @@ Workday::planDelivery($receivedAt, $plan);
 Workday::captureDeliveryPromise($receivedAt, $plan, ['horizon_days' => 14]);
 Workday::compareDeliveryPromise($snapshotOrPayload);
 Workday::deliverySlots($readyAt, $options);
+Workday::evaluateSla($startedAt, $evaluatedAt, $slaOptions);
 ```
 
 `isHoliday()` means non-working day. It includes weekends, recurring calendar holidays, and exact custom holidays unless an extra working day override exists.
