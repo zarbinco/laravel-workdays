@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added opt-in delivery-promise capture and comparison with portable immutable snapshots, bounded effective-calendar evidence, deterministic calendar fingerprints, and separate payload-integrity checks.
+- Added frozen config/database/chain holiday materialization for original estimates, explicit shared horizons, inherited-profile and overnight/cutoff integration, runtime metadata, and observed calendar-day differences.
+- Added unchanged/earlier/later/unresolvable comparison results without automatic promise updates or persistence, strict snapshot restoration, focused regression coverage, and aligned English/Persian usage and manual verification guides.
 - Added optional hierarchical profile inheritance with bounded parent chains, normalized weekday overrides, explicit section-aware merge/clear rules, and selected-child identity across config/database/chain storage.
 - Added deterministic context-based profile routing through `resolveProfile()` and `profileFor()`, with strict matching, specificity/configuration-order precedence, explicit fallback, and immutable `ResolvedProfile` results without raw context exposure.
 - Integrated inherited cutoff, overnight, and exceptional schedules with existing delivery planning and slot generation, preserving lazy cutoff validation and legacy paths, with focused regression tests and aligned English/Persian configuration and manual guides.

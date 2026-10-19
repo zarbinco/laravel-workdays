@@ -30,7 +30,7 @@ final readonly class DeliveryPlanner
      * @param  callable(string, int): BusinessDayCalculator  $resolveCalculator
      * @param  null|callable(string): array<string, mixed>  $resolveProfileConfig
      */
-    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null)
+    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null, private ?int $horizonDays = null, private ?array $knownProfiles = null)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
         $this->resolveProfileConfig = $resolveProfileConfig === null ? null : Closure::fromCallable($resolveProfileConfig);
@@ -49,6 +49,14 @@ final readonly class DeliveryPlanner
             $limit = ProfileConfigValidator::validateMaxScanDays(config('workdays.max_scan_days', 3660));
         } catch (InvalidArgumentException $exception) {
             throw new WorkdayConfigurationException('Invalid delivery planning horizon: '.$exception->getMessage(), previous: $exception);
+        }
+
+        if ($this->horizonDays !== null) {
+            if ($this->horizonDays < 1 || $this->horizonDays > $limit) {
+                throw new WorkdayConfigurationException('The snapshot horizon must be positive and must not exceed workdays.max_scan_days.');
+            }
+
+            $limit = $this->horizonDays;
         }
 
         // UTC is used only to advance Gregorian date labels, including skipped civil dates.
@@ -162,7 +170,8 @@ final readonly class DeliveryPlanner
             : $profileConfig;
     }
 
-    private function normalizeInput(string|DateTimeInterface $receivedAt, string $timezone): CarbonImmutable
+    /** @internal Shared strict input normalization for delivery promise capture. */
+    public function normalizeInput(string|DateTimeInterface $receivedAt, string $timezone): CarbonImmutable
     {
         try {
             $normalized = CutoffDateTimeNormalizer::toImmutable($receivedAt, $timezone);
@@ -387,7 +396,7 @@ final readonly class DeliveryPlanner
     /**
      * @param  array<string, mixed>  $plan
      */
-    private function validatePlan(array $plan): void
+    public function validatePlan(array $plan, ?array $knownProfiles = null): void
     {
         $this->rejectUnknownKeys($plan, ['timezone', 'profile_timezones', 'cutoff_profile', 'stages'], 'Delivery plan');
         $this->validateTimezone($plan['timezone'] ?? null, 'Delivery plan timezone');
@@ -472,7 +481,9 @@ final readonly class DeliveryPlanner
             }
         }
 
-        $profileConfigs = config('workdays.profiles', []);
+        // A frozen plan may retain an unused timezone mapping whose live profile was removed.
+        $registry = $knownProfiles ?? $this->knownProfiles;
+        $profileConfigs = $registry === null ? config('workdays.profiles', []) : array_fill_keys($registry, true);
 
         foreach (array_keys($plan['profile_timezones']) as $profile) {
             // Referenced profiles are resolved once below, with their stage's error context.

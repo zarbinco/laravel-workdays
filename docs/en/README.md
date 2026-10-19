@@ -1283,6 +1283,210 @@ In B and C, the carrier opens at 12:00 when the warehouse closes for lunch. The 
 - F: restore the original UTC fixture and use a handoff-only plan. Input June 29 at 13:00 hands off immediately; 12:00 waits until 13:00 because the warehouse is at lunch; 17:00 rolls to June 30 at 13:00. A 60-minute warehouse work stage starting at 16:00 may complete at 17:00, but its following pickup must also wait until June 30 at 13:00.
 - G: add July 4 as an `extra_working_days` date to warehouse and carrier, with `extra_working_day_hours => [['09:00', '17:00']]` on both. Without cutoff, a plan containing 60 warehouse work minutes then handoff, received July 4 at 08:00 UTC, starts at 09:00 and completes both work and handoff at 10:00. Remove the fixture overrides after checking.
 
+## Calendar Versions And Delivery Promise Snapshots
+
+`captureDeliveryPromise()` records a delivery estimate together with a bounded, immutable view of the calendar rules used to calculate it. `compareDeliveryPromise()` later recalculates the same input and plan against current rules, while preserving the original result. A store can keep its original customer promise separately from a changing operational estimate and decide what action a comparison warrants.
+
+These APIs are opt-in on `WorkdayManager` and the facade. They do not persist snapshots, update orders or shipments, make reservations, notify customers, or schedule future comparisons. The application owns storage, authorization, identifying affected orders, deciding whether to revise a promise, and customer communication. Existing `planDelivery()` results and Phase 01–05 APIs retain their public contracts.
+
+### Complete Local Capture And Comparison Example
+
+Use this dedicated config-only fixture in a local `php artisan tinker` session. The warehouse inherits its calendar, hours, and UTC cutoff from a parent. The plan finishes after one carrier business-date lead time; its final stage defines the estimate, rather than proving physical delivery.
+
+```php
+use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot;
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$promiseOriginalConfig = config('workdays');
+$promiseWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$promiseProfiles = [
+    'promise_base' => [
+        'weekends' => ['Saturday', 'Sunday'],
+        'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+        'custom_holidays' => [],
+        'extra_working_days' => [],
+        'working_hours' => array_fill_keys($promiseWeekdays, [['09:00', '17:00']]),
+        'cutoff' => ['timezone' => 'UTC', 'time' => '14:00'],
+    ],
+    'promise_warehouse' => ['extends' => 'promise_base'],
+    'promise_carrier' => ['extends' => 'promise_base'],
+];
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 31,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $promiseProfiles),
+]);
+
+$deliveryPlan = [
+    'timezone' => 'UTC',
+    'profile_timezones' => ['promise_warehouse' => 'UTC', 'promise_carrier' => 'UTC'],
+    'cutoff_profile' => 'promise_warehouse',
+    'stages' => [
+        ['id' => 'preparation', 'type' => 'work', 'profile' => 'promise_warehouse', 'minutes' => 120],
+        ['id' => 'transit', 'type' => 'business_days', 'profile' => 'promise_carrier', 'days' => 1],
+    ],
+];
+$snapshot = Workday::captureDeliveryPromise(
+    '2026-11-02T10:00:00Z',
+    $deliveryPlan,
+    ['horizon_days' => 14],
+);
+$snapshot->calendarVersion;
+$snapshot->originalResult->estimatedCompletionAt; // November 3, 12:00 UTC.
+
+// Persist this JSON using the application's own storage when needed.
+$payload = $snapshot->toArray();
+$storedJson = json_encode($payload, JSON_THROW_ON_ERROR);
+$restored = DeliveryPromiseSnapshot::fromArray(
+    json_decode($storedJson, true, 32, JSON_THROW_ON_ERROR),
+);
+$unchanged = Workday::compareDeliveryPromise($restored);
+// Also accepts $snapshot directly, or the serialized $payload array.
+// versionChanged=false, estimateChanged=false, direction=unchanged, deltaSeconds=0.
+```
+
+The capture resolves the effective inherited configuration and materializes holiday inputs first. It calculates both the original plan and date evidence from that same frozen in-memory view, using the existing planner, cutoff rules, and working-time engine. It does not attach a later calendar read to an earlier live estimate.
+
+Change only these test settings to observe an impact:
+
+```php
+config([
+    'workdays.profiles.promise_carrier.custom_holidays' => ['2026-11-03' => 'Test holiday'],
+]);
+$later = Workday::compareDeliveryPromise($payload);
+// Current completion: November 4, 12:00 UTC; direction=later; deltaSeconds=86400.
+// $snapshot->originalResult still completes on November 3 at 12:00 UTC.
+
+config([
+    'workdays.profiles.promise_carrier.custom_holidays' => [],
+    'workdays.profiles.promise_base.special_working_hours' => [
+        '2026-11-02' => [['09:00', '11:00']],
+    ],
+]);
+$changedHours = Workday::compareDeliveryPromise($payload);
+// Preparation now finishes November 3 at 10:00; transit completes November 4 at 10:00.
+$changedHours->changedCalendarDays;
+
+config([
+    'workdays.profiles.promise_base.working_hours' => [],
+    'workdays.profiles.promise_base.special_working_hours' => [],
+]);
+$unresolvable = Workday::compareDeliveryPromise($payload);
+// status/direction=unresolvable; current estimate, estimateChanged and deltaSeconds are null.
+// The original result remains available; inspect $unresolvable->error for the constraint.
+```
+
+### Horizon, Profiles, And Captured Dates
+
+Capture requires `['horizon_days' => N]`, with a strict PHP integer from `1` through `31`, not exceeding `workdays.max_scan_days`. No other option keys are supported. Numeric strings, floats, zero, negative values, and values outside the limits are invalid. At most eight distinct referenced profiles are allowed. These limits apply only to capture/comparison and do not replace Phase 02's existing defaults.
+
+Day zero is the received instant's date in the plan timezone. `horizon_days = 14` allows that date and fourteen future calendar dates, through day 14 inclusive; it is not Phase 03's count of fourteen dates. All stages share this horizon. Neither capture nor comparison extends it or resets it per stage. Comparison reuses the original horizon and remains subject to the configured safety limit.
+
+Evidence coverage includes deterministic neighboring dates for differing profile timezones and overnight ownership. Convert the plan's day-zero midnight instant and its horizon's exclusive ending-midnight instant to each profile timezone. The observed range starts two date labels before the first converted date and ends two labels after the latter converted date, inclusive. Provider inputs additionally include one preceding shift-owner date. This date-label margin does not extend the permitted planning horizon.
+
+For the same-UTC example, the plan may finish through November 16, 2026. Observed evidence covers October 31 through November 19 inclusive: day −2 through day 17, twenty dates per profile. Dated provider inputs additionally cover October 30. A same-timezone horizon of 31 has 37 observed dates per profile. Relevant dated overrides and seasons are trimmed to provider coverage; active recurring annual holiday maps for selected profiles are retained. Entirely skipped civil dates create no fabricated working time.
+
+Capture requires the covered Gregorian range, including margins, to fit years `0001`–`9999` and rejects historical cutoff offsets containing seconds because nested cutoff timestamps use `HH:MM` offsets.
+
+### Portable Schema And Integrity
+
+`Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot` is immutable and restores through `fromArray()` after a normal JSON round-trip.
+
+| Property | Serialized key | Meaning |
+|---|---|---|
+| `schemaVersion` | `schema_version` | Snapshot format version, initially integer `1`. |
+| `calendarVersion` | `calendar_version` | Deterministic SHA-256 calendar-content fingerprint. |
+| `receivedAt` | `received_at` | Original received instant as immutable UTC. |
+| `plan` | `plan` | Validated original plan with its actual selected profile names. |
+| `horizonDays` | `horizon_days` | Original explicit future-date horizon. |
+| `originalResult` | `original_result` | Complete original `DeliveryPlanResult`, including ordered stages and optional cutoff result. |
+| `calendarEvidence` | `calendar_evidence` | Bounded effective configuration, provider inputs, coverage, and observed date decisions. |
+| `runtimeMetadata` | `runtime_metadata` | Available implementation/runtime versions and relevant calendar metadata. |
+| Integrity checksum | `integrity_hash` | Separate checksum covering the stored payload, rather than just the calendar version. |
+
+New instant fields serialize in UTC with six microsecond digits and an explicit `+00:00` offset. Existing nested result contracts remain intact, including the policy-local cutoff result's offsets. Date labels use Gregorian `Y-m-d`. Evidence records profile/date identity, business-day/holiday/extra-working-day decisions, effective working windows where needed, and holiday reasons/source information. Profiles used exclusively for business-date transit do not require working hours just to obtain evidence.
+
+Validation limits the canonical JSON representation to **2 MiB (2,097,152 bytes)**, depth **32**, and **100,000 nodes**. Schema, fields, types, dates, timestamps, stage definitions, profiles, evidence, and checksums are validated. Missing required fields, unsupported schema versions, malformed or oversized content, unsupported objects, and fingerprint mismatches are invalid input, not a successful calendar-change comparison. JSON-compatible values retain their numeric/boolean types; imported data is never restored with unsafe PHP `unserialize()` or evaluated as code.
+
+Comparison date differences retain full previous/current rows from two bounded calendar views. These combined diagnostics have a separate output limit of **5 MiB (5,242,880 bytes)**, depth **32**, and **210,000 nodes**. Snapshot imports retain the limits above.
+
+Structural validation and checksum verification always apply. Additional consistency checks replay the captured rules/result when runtime metadata matches and the current `max_scan_days` can accommodate the original horizon. A different runtime or reduced safety limit does not supply a historical execution environment; the stored original remains available and current recalculation reports its own outcome.
+
+Exact local anchor/window/horizon checks require matching timezone-database versions; otherwise bounded structural/integrity checks remain and `runtimeChanged` flags recalculation under the current timezone database, without proving historical local replay.
+
+The calendar fingerprint and whole-payload integrity checksum provide deterministic integrity checks. They are not signatures or authentication against someone who can rewrite both the payload and its hashes, and do not establish regulatory compliance. Protect stored snapshots using the application's own access controls and storage policy. Customer IDs, addresses, phone numbers, order IDs, and routing context are not automatically included; avoid placing private data in application-supplied plan identifiers.
+
+### What A Calendar Version Means
+
+A calendar version is a content fingerprint, not a sequential database revision or capture timestamp. Canonical JSON recursively sorts associative-map keys, preserves meaningful list order and value types, retains meaningful explicit nulls, and normalizes dates, instants, and supported weekday aliases. A fixed schema/domain prefix separates the hash input from unrelated uses of SHA-256.
+
+The version covers relevant effective profile settings after inheritance, calendar-provider inputs, profile timezones and coverage, cutoff settings where applicable, working/exceptional/seasonal/overnight schedules, Hijri calculation settings, and observed calendar decisions. Equivalent unordered holiday-map insertion order and irrelevant database row IDs do not alter it. Capture time, random IDs, object identity, unrelated configuration, and unreferenced profiles are not version inputs.
+
+`versionChanged` and `estimateChanged` answer different questions. A relevant calendar change after the plan's completion can change the version while leaving the estimate identical. Conversely, runtime/calendar-library or timezone-database changes are surfaced separately and can affect interpretation. Available PHP, calendar-library, timezone-database, and calculation-schema metadata is recorded; unavailable versions are represented explicitly rather than invented. A stored result remains an audit artifact, not a promise of identical recomputation across different runtimes or historical database restoration.
+
+### Comparison Results And Observed Differences
+
+`Zarbinco\LaravelWorkdays\Data\DeliveryPromiseComparison` is immutable. A successful recalculation has `status = resolved` and direction `unchanged`, `earlier`, or `later`; failure to calculate within current constraints has `status = unresolvable` and direction `unresolvable`.
+
+| Property / serialized field | Meaning |
+|---|---|
+| `originalCalendarVersion` / `original_calendar_version` | Stored original calendar fingerprint. |
+| `currentCalendarVersion` / `current_calendar_version` | Current fingerprint when current evidence can be obtained. |
+| `versionChanged` / `version_changed` | Whether current and original calendar content differ, when comparable. |
+| `estimateChanged` / `estimate_changed` | Whether completion instants differ; `null` if unresolvable. |
+| `direction` / `direction` | `unchanged`, `earlier`, `later`, or `unresolvable`. |
+| `originalEstimatedCompletionAt` / `original_estimated_completion_at` | Original immutable UTC completion instant. |
+| `currentEstimatedCompletionAt` / `current_estimated_completion_at` | Recalculated immutable UTC completion, or `null` if unresolvable. |
+| `deltaSeconds` / `delta_seconds` | Current minus original completion: positive is later, negative earlier, zero unchanged; may include fractional seconds for microsecond differences; `null` if unresolvable. |
+| `changedCalendarDays` / `changed_calendar_days` | Bounded observed differences sorted by profile and date, with `profile`, `date`, and `changed_fields`. |
+| `runtimeChanged` / `runtime_changed` | Whether recorded runtime/algorithm metadata differs. |
+| `configurationChanged` / `configuration_changed` | Nullable diagnostic for effective settings, Hijri configuration, and effective config-source holiday inputs. |
+| `holidayInputsChanged` / `holiday_inputs_changed` | Nullable diagnostic for merged effective holiday-provider input changes across sources. |
+| `databaseRulesChanged` / `database_rules_changed` | Nullable diagnostic for effective database-source holiday input changes. |
+| `error` / `error` | Useful recalculation failure details, or `null` on success. |
+
+For an unchanged comparison, `version_changed = false`, `estimate_changed = false`, direction is `unchanged`, and `delta_seconds = 0`. A version-only change can instead have `version_changed = true` with those same estimate fields. Removing a holiday that affected the original plan can move the estimate earlier and produce a negative delta. Changed-date evidence shows observed calendar/window/reason differences; it does not prove that every listed date caused the movement. Policy or runtime differences need not appear as a date-level working-window change.
+
+The input diagnostics compare effective captured content, not raw config-file revisions or database-table revision counters. Deactivating a database override can reveal an inherited config rule and therefore change both source-specific diagnostics. `holiday_inputs_changed` covers the merged effective input across sources. These flags distinguish observed content changes without establishing which edit caused an ETA movement.
+
+Comparison validates and preserves the stored result, original received instant, plan, selected profile names, and horizon. It materializes current effective rules and reruns the existing planner. It does not resolve routing again or substitute a newly routed warehouse/carrier. An unresolvable comparison retains the original completion and reports the failed constraint without fabricating a current estimate. Invalid stored input throws `InvalidArgumentException` instead of returning an apparently valid `unresolvable` comparison.
+
+### Storage Consistency, Performance, And Responsibilities
+
+Config storage captures effective inherited definitions. Database storage reads active recurring and bounded dated rules for each selected profile's actual name; parent database rows are not inherited. Chain storage combines inherited config data with the child's database rules using existing precedence, titles, and source reporting. Cutoff and enhanced working-time behavior are reused without a second planning or holiday engine.
+
+Once provider inputs are materialized, the original calculation and evidence share that frozen view. Initial database reads are not automatically one transactionally consistent cross-query snapshot: an application needing strict consistency must supply an appropriate read transaction/isolation policy. The package does not lock holiday records or start a transaction that changes application write behavior, and capture/comparison perform no database writes.
+
+Database/chain materialization uses two batched SELECTs per selected profile, for recurring rules and dated exceptions, independent of horizon length or candidate minutes. Config-only capture needs no holiday database queries. Effective configuration and providers are reused within an operation, date coverage and profile count are bounded, and no global/persistent cache or unrelated legacy-path work is added. The 2 MiB validation bound remains relevant when profiles contain large definitions or reason titles.
+
+Measured compact JSON sizes for this UTC config fixture on PHP 8.3.30 / Carbon 3.13.0 are below. The one-profile variation keeps only the warehouse preparation stage and its cutoff. Sizes vary with definitions, names, titles, results, and runtime metadata.
+
+| Referenced profiles | Horizon | Observed dates per profile | JSON bytes |
+|---|---|---|---|
+| One | 1 | 7 | 3,964 |
+| One | 14 | 20 | 7,676 |
+| One | 31 | 37 | 12,556 |
+| Two, as above | 14 | 20 | 12,785 |
+
+### Ten Manual Checks
+
+Use only the dedicated fixture above; all dates are in 2026 and times are UTC.
+
+| Check | Action | Expected result |
+|---|---|---|
+| 1. Capture | Create `$snapshot` with the explicit fourteen-day horizon. | Original completion November 3, 12:00; a non-empty SHA-256 calendar version. |
+| 2. Serialize | Encode `$payload`, decode JSON, restore `$restored`. | Same calendar version and original result; portable JSON-compatible fields. |
+| 3. Unchanged | Inspect `$unchanged->toArray()`. | Resolved, both change flags false, direction `unchanged`, delta `0`. |
+| 4. Test holiday | Add the carrier's November 3 config holiday as shown. | Only current test configuration changes; stored evidence remains unchanged. |
+| 5. Compare holiday | Inspect `$later`. | November 4, 12:00; `later`, `86400` seconds; affected child/date appears in differences. |
+| 6. Preserve original | Reinspect `$snapshot->originalResult` and stored JSON. | Still November 3, 12:00 with the original evidence and version. |
+| 7. Shorter hours | Remove the test holiday and set the parent's November 2 hours to 09:00–11:00. | Calendar business date remains valid; preparation carries into November 3. |
+| 8. Compare hours | Inspect `$changedHours` and its changed-date list. | November 4, 10:00; working-window differences are visible. |
+| 9. Inherited profile | Inspect selected names/effective evidence; inspect `$unresolvable` after clearing hours. | Child identities retained; inherited settings respected; no-availability comparison is explicitly unresolvable. |
+| 10. Side effects | Inspect application state after these config-only calls. | No order update, database write, reservation, notification, or network request. |
+
+Restore the session with `config(['workdays' => $promiseOriginalConfig]);`. Persist or communicate a revised promise only through explicit application logic. Do not test by changing production holiday rows, and do not treat this audit feature as capacity management, booking, automatic notification, or a scheduled monitoring service.
+
 ## Delivery And Pickup Time Slots
 
 `Workday::deliverySlots($readyAt, $options)` generates customer-selectable delivery, collection, or return drop-off intervals from one serving profile's calendar and working hours. For an online store, calculate when an item will be ready, generate eligible checkout intervals, then apply your application's capacity and booking checks.
@@ -1606,6 +1810,8 @@ Workday::profile('global')->diffBusinessDays($startDate, $endDate);
 Workday::profile('global')->calculate($date, 5);
 Workday::profile('warehouse')->resolveCutoff($receivedAt);
 Workday::planDelivery($receivedAt, $plan);
+Workday::captureDeliveryPromise($receivedAt, $plan, ['horizon_days' => 14]);
+Workday::compareDeliveryPromise($snapshotOrPayload);
 Workday::deliverySlots($readyAt, $options);
 ```
 

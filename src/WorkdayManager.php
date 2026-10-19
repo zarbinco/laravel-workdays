@@ -9,10 +9,13 @@ use DateTimeInterface;
 use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
+use Zarbinco\LaravelWorkdays\Calendar\DeliveryPromiseAuditor;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
+use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseComparison;
+use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
 use Zarbinco\LaravelWorkdays\Data\ResolvedProfile;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
@@ -123,6 +126,16 @@ final class WorkdayManager
             },
             $resolveConfig,
         ))->plan($receivedAt, $plan);
+    }
+
+    public function captureDeliveryPromise(string|DateTimeInterface $receivedAt, array $plan, array $options): DeliveryPromiseSnapshot
+    {
+        return (new DeliveryPromiseAuditor)->capture($receivedAt, $plan, $options);
+    }
+
+    public function compareDeliveryPromise(DeliveryPromiseSnapshot|array $snapshot): DeliveryPromiseComparison
+    {
+        return (new DeliveryPromiseAuditor)->compare($snapshot);
     }
 
     /**
