@@ -1283,6 +1283,268 @@ In B and C, the carrier opens at 12:00 when the warehouse closes for lunch. The 
 - F: restore the original UTC fixture and use a handoff-only plan. Input June 29 at 13:00 hands off immediately; 12:00 waits until 13:00 because the warehouse is at lunch; 17:00 rolls to June 30 at 13:00. A 60-minute warehouse work stage starting at 16:00 may complete at 17:00, but its following pickup must also wait until June 30 at 13:00.
 - G: add July 4 as an `extra_working_days` date to warehouse and carrier, with `extra_working_day_hours => [['09:00', '17:00']]` on both. Without cutoff, a plan containing 60 warehouse work minutes then handoff, received July 4 at 08:00 UTC, starts at 09:00 and completes both work and handoff at 10:00. Remove the fixture overrides after checking.
 
+## Reverse Delivery Scheduling And Latest Order Time
+
+`Workday::reversePlanDelivery($desiredCompletionAt, $plan, ['lookback_days' => 14])` finds the latest calendar-feasible order receipt that lets the existing forward plan finish at or before an inclusive deadline. Forward planning answers when a received order can finish; reverse planning answers how late that order can arrive. Both APIs use the same Phase 02 plan, profile calendars, stage rules, and forward horizon.
+
+The API is opt-in on the facade and `WorkdayManager`. It returns an immutable `Zarbinco\LaravelWorkdays\Data\ReverseDeliveryPlanResult`; it requires no new profile settings, tables, jobs, or dependencies. Select profiles explicitly in the plan. If context routing is needed, resolve it separately before constructing the plan.
+
+### Complete E-Commerce And Tinker Example
+
+Run this dedicated config-only fixture in a local `php artisan tinker` session. These test profiles reproduce the warehouse preparation, handoff, transit, and final processing from the forward-planning example. Keep the original configuration so the last step can restore it.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$reverseOriginalConfig = config('workdays');
+$reverseWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$reverseBase = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [],
+    'extra_working_days' => [],
+    'working_hours' => array_fill_keys($reverseWeekdays, [['09:00', '17:00']]),
+];
+$reverseProfiles = [
+    'reverse_base' => $reverseBase,
+    'reverse_warehouse' => [
+        'extends' => 'reverse_base',
+        'cutoff' => ['timezone' => 'UTC', 'time' => '14:00'],
+    ],
+    'reverse_split' => [
+        'extends' => 'reverse_warehouse',
+        'working_hours' => array_fill_keys($reverseWeekdays, [
+            ['09:00', '12:00'], ['13:00', '17:00'],
+        ]),
+    ],
+    'reverse_carrier' => [
+        'extends' => 'reverse_base',
+        'working_hours' => array_fill_keys($reverseWeekdays, [['12:00', '18:00']]),
+    ],
+    'reverse_last_mile' => ['extends' => 'reverse_base'],
+    'reverse_night' => [
+        'extends' => 'reverse_base',
+        'allow_overnight_working_hours' => true,
+        'working_hours' => [
+            'Monday' => [['22:00', '06:00']],
+            'Tuesday' => [], 'Wednesday' => [], 'Thursday' => [], 'Friday' => [],
+        ],
+    ],
+    'reverse_new_york' => array_replace($reverseBase, ['weekends' => []]),
+];
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 14,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $reverseProfiles),
+]);
+
+$reverseWork = function (string $profile, int $minutes = 120, bool $cutoff = false): array {
+    $plan = [
+        'timezone' => 'UTC',
+        'profile_timezones' => [$profile => 'UTC'],
+        'stages' => [
+            ['id' => 'preparation', 'type' => 'work', 'profile' => $profile, 'minutes' => $minutes],
+        ],
+    ];
+
+    if ($cutoff) {
+        $plan['cutoff_profile'] = $profile;
+    }
+
+    return $plan;
+};
+$reversePlan = [
+    'timezone' => 'UTC',
+    'profile_timezones' => [
+        'reverse_split' => 'UTC',
+        'reverse_carrier' => 'UTC',
+        'reverse_last_mile' => 'UTC',
+    ],
+    'cutoff_profile' => 'reverse_split',
+    'stages' => [
+        ['id' => 'preparation', 'type' => 'work', 'profile' => 'reverse_split', 'minutes' => 120],
+        ['id' => 'pickup', 'type' => 'handoff', 'profiles' => ['reverse_split', 'reverse_carrier']],
+        ['id' => 'transit', 'type' => 'business_days', 'profile' => 'reverse_carrier', 'days' => 2],
+        ['id' => 'final_delivery', 'type' => 'work', 'profile' => 'reverse_last_mile', 'minutes' => 60],
+    ],
+];
+
+$reverse = Workday::reversePlanDelivery(
+    '2026-07-01T16:30:00Z',
+    $reversePlan,
+    ['lookback_days' => 14],
+);
+$reverse->latestOrderAt; // 2026-06-29 13:30:00 UTC
+$reverse->forwardResult->stages;
+$reverse->toArray();
+
+// The same operation is available directly on the manager:
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)->reversePlanDelivery(
+    '2026-07-01T16:30:00Z', $reversePlan, ['lookback_days' => 14],
+);
+```
+
+For this checkout policy, the latest receipt and preparation start are June 29 at 13:30 UTC. Preparation finishes at 15:30, handoff occurs at 15:30, two carrier business dates end on July 1 at 15:30, and final processing finishes at the requested 16:30. The result's first-stage start is generic: another valid plan can begin with handoff or business days rather than warehouse preparation.
+
+### Inputs, Exact Search Window, And Forward Horizon
+
+The signature accepts `string|\DateTimeInterface $desiredCompletionAt`, the unchanged Phase 02 plan array, and an options array. `lookback_days` is required: a strict PHP integer from `1` to `31`, no greater than `workdays.max_scan_days`. Unknown options, numeric strings, floats, booleans, and null are rejected. The plan retains its required `timezone`, explicit `profile_timezones`, ordered list of 1–32 stages, unique IDs, and non-negative integer durations; there is no reverse-only stage schema.
+
+Convert the deadline to the plan timezone to determine day zero. A lookback of 14 includes that local date and the preceding 14 date labels, for 15 labels in total. `searchStartAt` is the first actual instant of the earliest included date; the deadline itself is the inclusive upper bound. Skipped civil dates create no fictitious receipts and do not extend the date-label range. A receipt outside this range is never returned.
+
+The backward range does not extend the forward planner's horizon. Every candidate must also complete within Phase 02's single `workdays.max_scan_days` horizon, anchored to that candidate's receipt date in the plan timezone. Later stages do not receive fresh horizons. A feasible receipt before the backward boundary cannot rescue an otherwise infeasible request.
+
+Inputs use the forward planner's strict absolute formats: naive space-separated `Y-m-d H:i[:s[.microseconds]]` uses the plan timezone; ISO `T` timestamps require `Z` or an explicit `±HH:MM`. Fractions need seconds and contain 1–6 digits. Date-only, relative, impossible, nonexistent local, and ambiguous naive fold timestamps are rejected. An explicit offset disambiguates a repeated hour. `DateTimeInterface` inputs preserve their instant and are never mutated. New result timestamps are immutable UTC instants, with seconds and microseconds retained according to the existing stage arithmetic.
+
+### Stage, Calendar, And Cut-Off Semantics
+
+| Stage | Reverse constraint under the existing forward behavior |
+|---|---|
+| `work` | Find the latest receipt whose normalized working start and configured business minutes finish in time. Lunch breaks, half-days, holidays, extra working days, special-date hours, seasonal schedules, and enabled overnight carry-in all apply. Zero minutes still normalizes to the next working instant. |
+| `handoff` | Both profiles must be open at the same actual instant in their independently configured timezones. A common opening is included; a common closing is excluded by `[start, end)`. Valid overnight overlap is supported. |
+| `business_days` | Count strictly future business date labels in the selected profile timezone, preserving the local clock, seconds, and microseconds where valid. Zero days is identity; working hours and `include_start_date` do not change this stage. Skipped dates are not counted, and a nonexistent target clock is not silently shifted. |
+
+A work stage can complete exactly at closing. That closing is not automatically a valid next work or handoff start. The solver preserves legacy whole-minute accounting and enhanced working-time precision; subtracting the nominal duration from the deadline is not a substitute for running the forward stage. In particular, no new rounding rule is applied to force a receipt onto a minute boundary.
+
+Legacy capacity accounting uses integer-second timestamps before counting whole minutes. Its latest feasible receipt can therefore retain a fractional second that an enhanced schedule would consume: the legacy lunch fixture permits `11:00:00.999999` for a 14:00 deadline, while the same enhanced wall-clock schedule permits `11:00:00.000000`. With Monday closed, the legacy simple fixture permits Friday `15:00:00.999999` and completes at `17:00:00.999999`. These results preserve the existing forward calculation, including its fractional-second closing behavior; the reverse API does not correct or round them away.
+
+Optional `cutoff_profile` has exactly the existing Phase 01/02 meaning: it names the first work stage's profile and its policy timezone must match that profile's mapped timezone. Omit it to avoid cutoff routing. Exclusive boundaries, weekday overrides, disabled weekdays, holiday/extra-day precedence, and future-date eligibility windows remain in effect. At or after cutoff, the order can still be feasible if routing to the next eligible business date allows on-time completion. That date's midnight planning anchor remains separate from the first actual working start.
+
+For a 14:00 cutoff, Monday's 17:00 deadline can yield `13:59:59.999999`; rounding up would route to another date. For Tuesday's 11:00 deadline and 120 preparation minutes, Tuesday at 09:00 is the latest receipt, and a Monday receipt at 14:00 is also feasible through Tuesday processing. There is no blanket rejection of receipts after cutoff.
+
+### DST, Exactness, And Practical Limits
+
+The latest receipt is the greatest feasible microsecond in the bounded search, and the delivery deadline is inclusive. The solver refines receipt intervals at relevant calendar/cutoff/timezone boundaries using actual forward-plan prefixes with the original receipt and shared horizon. It searches precisely within regions where monotonicity is established and excludes later regions before selecting the latest receipt. Preserving a local clock during `business_days` can make the complete forward plan non-monotonic in UTC around a repeated hour; a single global monotonic-search assumption is therefore unsafe. A fresh complete forward calculation verifies the selected receipt and is retained in the result. Checking only the next microsecond would not prove that a later disconnected feasible region is absent.
+
+The search is bounded and uses calendar intervals rather than scanning every minute or microsecond. Effective profile configuration is resolved once per operation. Calculators are cached by profile and actual scan limit, sharing the same holiday provider; crossing profile timezones can require another calculator variant, without rebuilding providers for every probe. The API introduces no persistent/global cache or database writes. Ordinary forward planning is unchanged when reverse planning is unused. Complexity still depends on the stage count, date range, working windows, and timezone/calendar discontinuities; this is not a capacity or real-time carrier search. An inability to establish an exact answer raises an error rather than returning an approximation.
+
+The operation has safety budgets of 65,536 forward-prefix evaluations and 32,768 calendar cells; exhausting either raises `RuntimeException`. Exact reverse proof also rejects legacy working windows whose existing elapsed-midnight arithmetic spills past their receiving civil date, legacy schedules based on ambiguous midnight, and timezone changes that move backward across a civil-date label in the searched range. Ordinary legacy transition-date windows such as 00:00–04:00 remain supported when they stay within their date. Explicit enhanced wall-clock schedules can avoid the legacy spill limitation, subject to their existing strict boundary rules; no calendar is silently converted or repaired.
+
+### Results And Serialization
+
+| Property | Meaning |
+|---|---|
+| `timezone` | Plan timezone used for the backward date labels and forward horizon. |
+| `targetCompletionAt` | Inclusive requested deadline, immutable UTC. |
+| `searchStartAt` | Earliest permitted receipt instant, immutable UTC. |
+| `feasible` | Whether any permitted receipt meets the deadline under the forward rules. |
+| `latestOrderAt` | Latest feasible order receipt, or `null`. |
+| `planningStartAt` | Initial cursor after optional cutoff routing, or `null`. |
+| `firstStageStartsAt` | Actual start of the first configured stage, or `null`. |
+| `estimatedCompletionAt` | Final forward-validated completion, or `null`. |
+| `slackMicroseconds` | Non-negative integer difference between the deadline and completion, or `null`. |
+| `forwardResult` | Verified immutable `DeliveryPlanResult`, or `null`; its `stages` contain the timeline. |
+
+`toArray()` uses the corresponding stable snake_case keys, real booleans/integers, and UTC `Y-m-d\TH:i:s.uP` timestamps with six microsecond digits and explicit `+00:00`. The nested forward result uses its existing `toArray()`, including policy-local cutoff serialization. When `feasible === false`, all six solution fields from `latestOrderAt` through `forwardResult` are null; the timezone, target, and search boundary remain available. An empty-feasibility result does not contain an out-of-range fallback receipt.
+
+| Exception | Typical cause |
+|---|---|
+| `Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException` | Invalid options/plan/profile, unknown keys or profiles, missing hours, or missing/mismatched requested cutoff. |
+| `InvalidArgumentException` | Invalid or unsupported deadline, including a nonexistent or ambiguous naive local time. |
+| `RuntimeException` | Search/representation limitations, an internal solver failure, or an inability to prove an exact latest receipt. Unexpected provider failures propagate; they are not ordinary infeasibility. |
+
+Valid but unavailable working time, absent handoff overlap, or candidates that cannot complete within the forward horizon can produce `feasible === false`. Malformed configuration and solver errors are never disguised as a closed calendar.
+
+### Application And Earlier-Phase Integration
+
+Config, database, and chain storage use their existing holiday inputs and precedence. Phase 05 inheritance supplies effective weekends, hours, special/seasonal/overnight schedules, cutoff, and holiday settings; database rows remain associated with the selected child profile, without automatic parent-row inheritance. A plan's explicit profile names do not trigger context routing.
+
+The application chooses the requested checkout deadline and decides whether `latestOrderAt` is still actionable; it may already be in the past. Reverse scheduling calculates calendar feasibility. It does not guarantee stock, confirm carrier capacity, reserve a delivery/pickup slot, place an order, or guarantee physical delivery. Recheck application-owned stock, payment, capacity, and booking rules before accepting a customer promise. Calendar changes can invalidate an earlier calculation.
+
+Re-run `planDelivery($reverse->latestOrderAt, $reversePlan)` when a current forward estimate is needed. Phase 06 can separately capture/audit a forward promise using that receipt and plan; reverse results are not automatically persisted or added to its snapshot schema. Phase 07 SLA and pause/resume behavior remain separate and unchanged. This API performs no order updates, notifications, or scheduled monitoring.
+
+### Thirteen Local Manual Checks
+
+Continue the fixture above. These calls use fixed dates and only the dedicated config profiles.
+
+```php
+$reverseSimplePlan = $reverseWork('reverse_base');
+$reverseSimple = Workday::reversePlanDelivery(
+    '2026-11-02T16:00:00Z', $reverseSimplePlan, ['lookback_days' => 14],
+); // latest: November 2, 14:00 UTC
+$reverseLunch = Workday::reversePlanDelivery(
+    '2026-11-02T14:00:00Z', $reverseWork('reverse_split'), ['lookback_days' => 14],
+); // latest: November 2, 11:00:00.999999 UTC (preserved legacy accounting)
+
+$reverseHandoffPlan = [
+    'timezone' => 'UTC',
+    'profile_timezones' => ['reverse_base' => 'UTC', 'reverse_carrier' => 'UTC'],
+    'stages' => [
+        ['id' => 'pickup', 'type' => 'handoff', 'profiles' => ['reverse_base', 'reverse_carrier']],
+    ],
+];
+$reverseOpening = Workday::reversePlanDelivery(
+    '2026-11-02T12:00:00Z', $reverseHandoffPlan, ['lookback_days' => 14],
+); // latest: 12:00 UTC
+$reverseClosing = Workday::reversePlanDelivery(
+    '2026-11-02T17:00:00Z', $reverseHandoffPlan, ['lookback_days' => 14],
+); // latest: 16:59:59.999999 UTC
+$reverseTransitPlan = [
+    'timezone' => 'UTC',
+    'profile_timezones' => ['reverse_carrier' => 'UTC'],
+    'stages' => [
+        ['id' => 'transit', 'type' => 'business_days', 'profile' => 'reverse_carrier', 'days' => 2],
+    ],
+];
+$reverseTransit = Workday::reversePlanDelivery(
+    '2026-11-04T15:30:00Z', $reverseTransitPlan, ['lookback_days' => 14],
+); // latest: November 2, 15:30 UTC
+$reverseCutoffPlan = $reverseWork('reverse_warehouse', 120, true);
+$reverseCutoff = Workday::reversePlanDelivery(
+    '2026-11-02T17:00:00Z', $reverseCutoffPlan, ['lookback_days' => 14],
+); // latest: November 2, 13:59:59.999999 UTC
+$reverseNextDay = Workday::reversePlanDelivery(
+    '2026-11-03T11:00:00Z', $reverseCutoffPlan, ['lookback_days' => 14],
+); // latest: November 3, 09:00 UTC
+$reverseAfterCutoff = Workday::planDelivery('2026-11-02T14:00:00Z', $reverseCutoffPlan);
+// planning start: November 3, 00:00; preparation: 09:00–11:00 UTC
+
+config(['workdays.profiles.reverse_base.custom_holidays' => ['2026-11-02' => 'Test closure']]);
+$reverseHoliday = Workday::reversePlanDelivery(
+    '2026-11-02T16:00:00Z', $reverseSimplePlan, ['lookback_days' => 14],
+); // latest receipt moves earlier
+$reverseImpossible = Workday::reversePlanDelivery(
+    '2026-11-02T16:00:00Z', $reverseSimplePlan, ['lookback_days' => 1],
+); // feasible: false; all solution fields: null
+config(['workdays.profiles.reverse_base.custom_holidays' => []]);
+$reverseOvernight = Workday::reversePlanDelivery(
+    '2026-11-03T02:00:00Z', $reverseWork('reverse_night', 180), ['lookback_days' => 14],
+); // latest: November 2, 23:00 UTC
+
+$reverseForward = Workday::planDelivery($reverse->latestOrderAt, $reversePlan);
+$reverseForward->estimatedCompletionAt->lessThanOrEqualTo($reverse->targetCompletionAt); // true
+$reverseForward->toArray() === $reverse->forwardResult->toArray(); // true
+
+$reverseFoldPlan = [
+    'timezone' => 'America/New_York',
+    'profile_timezones' => ['reverse_new_york' => 'America/New_York'],
+    'stages' => [
+        ['id' => 'transit', 'type' => 'business_days', 'profile' => 'reverse_new_york', 'days' => 1],
+    ],
+];
+$reverseFold = Workday::reversePlanDelivery(
+    '2026-11-02T01:15:00-05:00', $reverseFoldPlan, ['lookback_days' => 2],
+); // latest: 2026-11-01T06:15:00.000000+00:00, the later 01:15 at -05:00
+
+config(['workdays' => $reverseOriginalConfig]); // Restore the local test configuration.
+```
+
+| Check | What to confirm |
+|---|---|
+| 1 | The dedicated simple warehouse is Monday–Friday, 09:00–17:00 UTC. |
+| 2 | `$reverseSimplePlan` requests exactly 120 preparation minutes. |
+| 3 | `$reverseSimple->targetCompletionAt` is November 2 at 16:00 UTC. |
+| 4 | Its latest receipt is 14:00, with an on-time 16:00 completion. |
+| 5 | The legacy split lunch schedule gives `11:00:00.999999` for the 14:00 deadline, preserving its existing fractional-second accounting. |
+| 6 | Handoff is valid at 12:00 common opening, and its 17:00 closing boundary yields `16:59:59.999999`. |
+| 7 | Two carrier business dates give Monday 15:30 for Wednesday 15:30; inspect all four stages in `$reverse` too. |
+| 8 | Same-day cutoff is exclusive, while `$reverseAfterCutoff` and `$reverseNextDay` demonstrate valid next-day routing. |
+| 9 | The relevant holiday moves the result earlier; with a one-day lookback, the valid closed calendar returns infeasible. |
+| 10 | The overnight result is Monday 23:00, consuming three hours through midnight without duplication. |
+| 11 | The original forward planner accepts the returned receipt and unchanged plan. |
+| 12 | Its complete result equals the nested verified result and finishes no later than the inclusive target. The fold example selects the later repeated-hour occurrence. |
+| 13 | Only local config and calculations were used: no database write, order update, booking, notification, or scheduled job was created. Restore configuration after checking. |
+
 ## Calendar Versions And Delivery Promise Snapshots
 
 `captureDeliveryPromise()` records a delivery estimate together with a bounded, immutable view of the calendar rules used to calculate it. `compareDeliveryPromise()` later recalculates the same input and plan against current rules, while preserving the original result. A store can keep its original customer promise separately from a changing operational estimate and decide what action a comparison warrants.
@@ -2031,6 +2293,7 @@ Workday::profile('global')->diffBusinessDays($startDate, $endDate);
 Workday::profile('global')->calculate($date, 5);
 Workday::profile('warehouse')->resolveCutoff($receivedAt);
 Workday::planDelivery($receivedAt, $plan);
+Workday::reversePlanDelivery($desiredCompletionAt, $plan, ['lookback_days' => 14]);
 Workday::captureDeliveryPromise($receivedAt, $plan, ['horizon_days' => 14]);
 Workday::compareDeliveryPromise($snapshotOrPayload);
 Workday::deliverySlots($readyAt, $options);

@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added opt-in reverse delivery scheduling through `reversePlanDelivery()`, finding the latest calendar-feasible order receipt for an inclusive completion deadline with an explicit bounded lookback and the existing forward-plan schema.
+- Added immutable UTC `ReverseDeliveryPlanResult` objects with nullable infeasibility results, exact microsecond slack, separate receipt/planning/first-stage timestamps, and a verified nested forward result while preserving cutoff, calendar, timezone, and stage semantics.
+- Added focused reverse-scheduling regression coverage and aligned English/Persian API, e-commerce integration, search limitations, and thirteen-check local verification guides without order placement, reservations, or persistence.
 - Added opt-in business SLA evaluation through `evaluateSla()` with immutable UTC results, exact working-time budgets, consumed/paused/remaining/overdue metrics, and stable active/paused/breached statuses.
 - Added closed and ongoing pause normalization, explicit resume handling, microsecond-aware deadlines and breach boundaries, and a shared start-date horizon while reusing existing calendars, inherited schedules, and overnight behavior.
 - Added focused SLA/calendar/storage/timezone regression coverage and aligned English/Persian API, return-request integration, precision, limitations, and manual verification documentation without persistence or automatic monitoring.

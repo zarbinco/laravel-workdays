@@ -18,10 +18,12 @@ use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseComparison;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
 use Zarbinco\LaravelWorkdays\Data\ResolvedProfile;
+use Zarbinco\LaravelWorkdays\Data\ReverseDeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\SlaResult;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
 use Zarbinco\LaravelWorkdays\Delivery\DeliverySlotGenerator;
+use Zarbinco\LaravelWorkdays\Delivery\ReverseDeliveryPlanner;
 use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
@@ -133,6 +135,43 @@ final class WorkdayManager
     public function captureDeliveryPromise(string|DateTimeInterface $receivedAt, array $plan, array $options): DeliveryPromiseSnapshot
     {
         return (new DeliveryPromiseAuditor)->capture($receivedAt, $plan, $options);
+    }
+
+    /** @param array<string, mixed> $plan @param array<string, mixed> $options */
+    public function reversePlanDelivery(string|DateTimeInterface $desiredCompletionAt, array $plan, array $options): ReverseDeliveryPlanResult
+    {
+        $profiles = $this->profiles();
+        $resolved = [];
+        $calculators = [];
+        $provider = null;
+        $hijri = null;
+        $resolveConfig = function (string $profile) use ($profiles, &$resolved): array {
+            return $resolved[$profile] ??= $this->effectiveProfileConfig($profile, $profiles);
+        };
+        $resolveCalculator = function (string $profile, int $scanLimit) use ($profiles, &$resolved, &$calculators, &$provider, &$hijri, $resolveConfig): BusinessDayCalculator {
+            if (isset($calculators[$profile][$scanLimit])) {
+                return $calculators[$profile][$scanLimit];
+            }
+
+            $effective = $resolveConfig($profile);
+            // All selected configurations are resolved before the first provider is built.
+            // Keep child names intact, so database rows never inherit from a parent profile.
+            $provider ??= $this->holidayProvider(array_replace($profiles, $resolved));
+            $hijri ??= HijriCalendarAdapter::fromConfig();
+
+            return $calculators[$profile][$scanLimit] = new BusinessDayCalculator(
+                profile: $profile,
+                profileConfig: $effective,
+                includeStartDate: $this->includeStartDate(),
+                maxScanDays: $scanLimit,
+                hijriCalendar: $hijri,
+                holidayProvider: $provider,
+            );
+        };
+
+        return (new ReverseDeliveryPlanner(
+            new DeliveryPlanner($resolveCalculator, $resolveConfig), $resolveCalculator, $resolveConfig,
+        ))->plan($desiredCompletionAt, $plan, $options);
     }
 
     public function compareDeliveryPromise(DeliveryPromiseSnapshot|array $snapshot): DeliveryPromiseComparison
