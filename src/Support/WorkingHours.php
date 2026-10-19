@@ -18,6 +18,7 @@ final class WorkingHours
         private readonly string $profile,
         private readonly array $windowsByWeekday,
         private readonly array $extraWorkingDayWindows,
+        private readonly ?EffectiveWorkingHours $effective = null,
     ) {}
 
     /**
@@ -31,6 +32,10 @@ final class WorkingHours
                 $profile,
                 $profile,
             ));
+        }
+
+        if (self::hasEnhancedConfig($profileConfig)) {
+            return new self($profile, [], [], EffectiveWorkingHours::fromProfileConfig($profile, $profileConfig));
         }
 
         self::validateProfileConfig($profile, $profileConfig);
@@ -49,6 +54,16 @@ final class WorkingHours
      */
     public static function validateProfileConfig(string $profile, array $profileConfig): void
     {
+        if (array_key_exists('allow_overnight_working_hours', $profileConfig) && ! is_bool($profileConfig['allow_overnight_working_hours'])) {
+            throw new WorkdayConfigurationException(sprintf('The allow_overnight_working_hours config for profile [%s] must be a boolean.', $profile));
+        }
+
+        if (self::hasEnhancedConfig($profileConfig)) {
+            EffectiveWorkingHours::fromProfileConfig($profile, $profileConfig);
+
+            return;
+        }
+
         if (array_key_exists('working_hours', $profileConfig)) {
             self::normalizeWorkingHours($profile, $profileConfig['working_hours']);
         }
@@ -83,10 +98,23 @@ final class WorkingHours
         );
     }
 
+    /** @param array<string, mixed> $profileConfig */
+    public static function hasEnhancedConfig(array $profileConfig): bool
+    {
+        return ($profileConfig['allow_overnight_working_hours'] ?? false) === true
+            || array_key_exists('special_working_hours', $profileConfig)
+            || array_key_exists('seasonal_working_hours', $profileConfig);
+    }
+
+    public function effective(): ?EffectiveWorkingHours
+    {
+        return $this->effective;
+    }
+
     /**
      * @return array<int, array<int, TimeWindow>>
      */
-    private static function normalizeWorkingHours(string $profile, mixed $workingHours): array
+    public static function normalizeWorkingHours(string $profile, mixed $workingHours, bool $allowOvernight = false, bool $strict = false): array
     {
         if (! is_array($workingHours)) {
             throw new WorkdayConfigurationException(sprintf('The working_hours config for profile [%s] must be an array.', $profile));
@@ -120,7 +148,7 @@ final class WorkingHours
                 ));
             }
 
-            $windowsByWeekday[$isoWeekday] = self::normalizeWindows($profile, sprintf('working_hours.%s', self::describe($weekday)), $windows);
+            $windowsByWeekday[$isoWeekday] = self::normalizeWindows($profile, sprintf('working_hours.%s', self::describe($weekday)), $windows, $allowOvernight, $strict);
         }
 
         ksort($windowsByWeekday);
@@ -131,7 +159,7 @@ final class WorkingHours
     /**
      * @return array<int, TimeWindow>
      */
-    private static function normalizeWindows(string $profile, string $section, mixed $windows): array
+    public static function normalizeWindows(string $profile, string $section, mixed $windows, bool $allowOvernight = false, bool $strict = false): array
     {
         if (! is_array($windows)) {
             throw new WorkdayConfigurationException(sprintf('The %s config for profile [%s] must be an array of time windows.', $section, $profile));
@@ -151,7 +179,7 @@ final class WorkingHours
 
             [$start, $end] = $window;
 
-            if (! is_string($start) || ! self::isValidTime($start)) {
+            if (! is_string($start) || ! self::isValidTime($start) || ($strict && strlen($start) !== 5)) {
                 throw new WorkdayConfigurationException(sprintf(
                     'Invalid %s start time [%s] for profile [%s]. Expected HH:MM in 24-hour format.',
                     $section,
@@ -160,7 +188,7 @@ final class WorkingHours
                 ));
             }
 
-            if (! is_string($end) || ! self::isValidTime($end)) {
+            if (! is_string($end) || (! self::isValidTime($end) && ! ($allowOvernight && $end === '24:00')) || ($strict && strlen($end) !== 5)) {
                 throw new WorkdayConfigurationException(sprintf(
                     'Invalid %s end time [%s] for profile [%s]. Expected HH:MM in 24-hour format.',
                     $section,
@@ -171,7 +199,8 @@ final class WorkingHours
 
             $timeWindow = new TimeWindow($start, $end);
 
-            if ($timeWindow->endMinutes() <= $timeWindow->startMinutes()) {
+            if ($timeWindow->endMinutes() === $timeWindow->startMinutes()
+                || (! $allowOvernight && $timeWindow->endMinutes() < $timeWindow->startMinutes())) {
                 throw new WorkdayConfigurationException(sprintf(
                     'The %s window [%s] for profile [%s] must end after it starts.',
                     $section,
@@ -191,7 +220,13 @@ final class WorkingHours
         foreach ($normalized as $index => $window) {
             $previous = $normalized[$index - 1] ?? null;
 
-            if ($previous instanceof TimeWindow && $window->startMinutes() < $previous->endMinutes()) {
+            $previousEnd = $previous?->endMinutes();
+
+            if ($previous instanceof TimeWindow && $allowOvernight && $previousEnd < $previous->startMinutes()) {
+                $previousEnd += 1440;
+            }
+
+            if ($previous instanceof TimeWindow && $window->startMinutes() < $previousEnd) {
                 throw new WorkdayConfigurationException(sprintf(
                     'The %s windows for profile [%s] must not overlap.',
                     $section,

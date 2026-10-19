@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added optional exact-date and inclusive seasonal working-hour overrides with explicit empty schedules, strict Gregorian validation, and deterministic calendar-first precedence.
+- Added explicitly enabled overnight and full-day schedules, normalized daily carry-in windows, overlap-safe working-minute calculations, and strict local-boundary handling across timezone transitions while preserving the legacy profile path.
+- Integrated enhanced schedules with existing delivery planning and single-day slot generation, including representable `24:00` slot endings, focused regression coverage, and aligned English/Persian configuration and manual verification guides.
 - Added opt-in calendar-eligible delivery and pickup intervals through `Workday::deliverySlots()` and `WorkdayManager`, with immutable UTC `DeliverySlotsResult` and `DeliverySlot` objects and explicit local serialization.
 - Added strict slot-policy validation, elapsed notice buffers, working-window-aligned grids, bounded local-date searches, result limits, and conservative timezone-transition handling using existing profile calendars and holiday providers.
 - Added Phase 02 readiness integration, focused slot/calendar/storage/timezone and compatibility coverage, and aligned English/Persian usage, application responsibilities, limitations, and manual verification documentation.

@@ -158,6 +158,12 @@ final readonly class DeliverySlotGenerator
      */
     private function boundary(string $date, int $minute, DateTimeZone $zone, array $transitions): ?CarbonImmutable
     {
+        if ($minute === 1440) {
+            // An effective 24:00 closing boundary occupies no positive time on the next date.
+            $date = CarbonImmutable::createFromFormat('!Y-m-d', $date, 'UTC')->addDay()->toDateString();
+            $minute = 0;
+        }
+
         $wallTime = sprintf('%s %02d:%02d:00.000000', $date, intdiv($minute, 60), $minute % 60);
         $parsed = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s.u', $wallTime, $zone);
 

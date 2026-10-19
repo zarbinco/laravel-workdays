@@ -483,6 +483,182 @@ Business-time calculations use minute precision for add/diff methods. `addBusine
 
 String datetimes are parsed by Carbon using the application/default timezone. `DateTimeInterface` inputs preserve their timezone when converted to `CarbonImmutable`.
 
+## Special Hours, Seasonal Schedules, And Overnight Shifts
+
+Profiles can opt into exact-date hours, seasonal weekday schedules, and overnight shifts without a new facade API. Existing business-time methods, `planDelivery()`, and `deliverySlots()` use the selected profile's effective schedule automatically. All new settings are optional; shipped profiles and profiles without these settings retain their existing behavior and execution path.
+
+### Complete Configuration And Tinker Fixture
+
+Use this dedicated fixture in a local `php artisan tinker` session. It uses config-only calendars, preserves the original configuration for restoration, and creates no bookings, database records, notifications, or external requests.
+
+```php
+use Carbon\CarbonImmutable;
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$scheduleOriginalConfig = config('workdays');
+$scheduleWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$scheduleCalendar = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [],
+    'extra_working_days' => [],
+];
+$scheduleProfile = array_replace($scheduleCalendar, [
+    'working_hours' => array_fill_keys($scheduleWeekdays, [['09:00', '17:00']]),
+    'allow_overnight_working_hours' => true,
+    'special_working_hours' => [
+        '2026-11-02' => [['10:00', '12:00']],
+        '2026-11-03' => [],
+    ],
+    'seasonal_working_hours' => [
+        [
+            'from' => '2026-11-01',
+            'through' => '2026-11-30',
+            'weekdays' => [
+                'Monday' => [['08:00', '20:00']],
+                'Friday' => [],
+            ],
+        ],
+    ],
+]);
+$nightProfile = array_replace($scheduleCalendar, [
+    'allow_overnight_working_hours' => true,
+    'working_hours' => [
+        'Monday' => [['22:00', '06:00']],
+        'Friday' => [['22:00', '06:00']],
+    ],
+    'special_working_hours' => ['2026-11-07' => []],
+]);
+$nightCarrierProfile = array_replace($scheduleCalendar, [
+    'working_hours' => ['Tuesday' => [['01:00', '04:00']]],
+]);
+
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 14,
+    'workdays.profiles.hours-demo' => $scheduleProfile,
+    'workdays.profiles.night-demo' => $nightProfile,
+    'workdays.profiles.night-carrier-demo' => $nightCarrierProfile,
+]);
+
+$utc = static fn (string $value): CarbonImmutable => CarbonImmutable::parse($value, 'UTC');
+$day = Workday::profile('hours-demo');
+$night = Workday::profile('night-demo');
+
+$day->workingWindowsFor($utc('2026-11-02')); // 10:00–12:00: exact-date override.
+$night->workingWindowsFor($utc('2026-11-03')); // 00:00–06:00: Monday carry-in.
+$night->addBusinessMinutes($utc('2026-11-02 23:00'), 180); // November 3, 02:00 UTC.
+$night->diffBusinessMinutes($utc('2026-11-02 23:00'), $utc('2026-11-03 03:00')); // 240.
+$night->isBusinessDay($utc('2026-11-07')); // false: Saturday.
+$night->isBusinessTime($utc('2026-11-07 02:00')); // true: Friday's valid shift.
+```
+
+Use the same optional keys in your application's profile configuration. `special_working_hours` is an associative map of strictly valid Gregorian `Y-m-d` dates to window arrays; no Jalali-key conversion occurs. `seasonal_working_hours` is an ordered list with exactly `from`, `through`, and `weekdays` per entry. Boundaries are inclusive, may cross a Gregorian year boundary, and must satisfy `from <= through`. These are exact date ranges, not annually recurring seasons. Overlapping ranges are rejected even if they override different weekdays.
+
+Seasonal weekday keys follow the existing `WeekdayNormalizer` names and ISO integers. Aliases for the same weekday cannot appear twice. A missing weekday inherits the regular weekly schedule; an explicit `[]` means no shifts start on that weekday during the season.
+
+`allow_overnight_working_hours` is a strict boolean, defaulting to `false`. Exact-date and seasonal daytime overrides do not require it to be `true`. Enabling it permits overnight windows in weekly, exact-date, seasonal, and `extra_working_day_hours` schedules. It also permits `['00:00', '24:00']` as an explicit full-day window. `24:00` is only an end boundary, representing the next local midnight; it cannot be a start. Equal boundaries, malformed windows, invalid times such as `25:00`, and overlapping windows within a configured schedule are rejected. A smaller end clock means one shift ending on the next date, never a multi-day shift longer than 24 hours. Without overnight opt-in, existing end-before-start and `24:00` validation remains unchanged.
+
+### Selection Order And Explicit Empty Hours
+
+The schedule selects shifts that **start** on a date in this order:
+
+1. Apply existing calendar eligibility, including holiday-provider and extra-working-day precedence.
+2. Use an exact-date override when its key exists, replacing regular and seasonal hours completely.
+3. Otherwise, use an explicit weekday entry from the matching season.
+4. Otherwise, inherit regular weekly hours.
+5. Apply the existing extra-working-day fallback where applicable.
+
+A holiday or weekend does not gain new shifts merely because special or seasonal hours exist. Reopen it with the existing `extra_working_days` mechanism. Calendar data continues to come from the chosen config/database/chain provider; schedule overlays stay in profile configuration and need no new table or model.
+
+An exact-date `[]` or explicit seasonal weekday `[]` prevents all new shifts on that date, including extra-working-day fallback. An omitted seasonal weekday inherits weekly hours and their existing fallback behavior. A calendar business date with empty hours remains a business date: `isBusinessDay()`, `isHoliday()`, `isWeekend()`, and `resolveCutoff()` retain their meanings. Opening hours neither change cutoff nor turn a calendar-date `business_days` stage into working-hour arithmetic.
+
+### Overnight Ownership And Effective Daily Windows
+
+A 22:00–06:00 shift belongs to its **start date**. A valid Friday shift can continue into Saturday, even when Saturday is a weekend, holiday, or an exact-date empty-hours override. Saturday can therefore have `isBusinessDay() === false` and `isBusinessTime(02:00) === true`. A holiday on Friday prevents that shift unless Friday is reopened as an extra working day. To cancel an incoming overnight shift, change or remove it on its start date; closing the receiving date does not truncate it.
+
+`workingWindowsFor()` still returns ordered, non-overlapping `TimeWindow` objects for the requested civil date. It returns effective daily fragments, rather than the unsplit overnight configuration:
+
+| Configured shift | Effective windows |
+|---|---|
+| Monday 22:00–Tuesday 06:00 | Monday `22:00–24:00`; Tuesday `00:00–06:00`. |
+| Valid carry-in `00:00–06:00` plus a same-day `05:00–09:00` shift | One union `00:00–09:00`; overlap is not counted twice. |
+| Carry-in `00:00–06:00` plus independently configured `06:00–09:00` | Two touching windows remain separate. |
+
+The previous date is evaluated using its own exact-date, seasonal, weekly, and calendar rules. No carry-in is fabricated from an ineligible start date. A same-date final fragment may expose `TimeWindow('22:00', '24:00')`; the public method does not expose `TimeWindow('22:00', '06:00')`.
+
+Working windows remain half-open: opening is included and closing is excluded. For the Monday night fixture, Monday 21:59:59 is closed, 22:00 is open, Tuesday 05:59:59 is open, and 06:00 is closed. `nextBusinessTime()` and `previousBusinessTime()` traverse carry-in and exceptional schedules within their existing bounds. The previous-time convention at closing remains one second before the boundary. Minute/hour addition and differences consume effective working time across midnight without duplication, preserve signed reverse differences, retain existing hour conversion rules, and retain zero-duration behavior.
+
+### Timezones, DST, And Compatibility
+
+There is no new global or profile timezone setting for direct business-time calls. The calculator uses the timezone of the supplied datetime; existing strings still use Carbon's application/default parsing behavior. Prefer an explicit timezone-aware `DateTimeInterface` value, as in the UTC fixture. Phase 02 continues to convert through `profile_timezones`, and Phase 03 continues to require its explicit `timezone` option. These distinct contracts remain unchanged.
+
+For enhanced schedules, local boundaries are constructed on the relevant local dates. A nonexistent or ambiguous configured boundary fails with an error identifying the profile, date, and boundary; it is never silently shifted or assigned an arbitrary occurrence. Valid unambiguous boundaries across an offset change use actual elapsed time. A valid 22:00–06:00 New York shift spanning spring-forward has 420 business minutes; the corresponding fall-back shift has 540, provided its start date is calendar-eligible.
+
+When a civil date begins after skipped midnight, a synthetic `00:00` daily fragment uses that date's first actual instant, as in `America/Santiago`. This exception applies only to nonexistent day-start midnight; ambiguous synthetic midnight boundaries still fail with a clear profile/date/boundary error. Historical folds that repeat midnight, such as `America/Goose_Bay` in 1988, can therefore reject a daily split even when the original overnight shift's start and end are unambiguous. A fully skipped civil date contributes no invented time and does not extend the bounded date-label search. Phase 03 retains its stricter candidate-boundary and transition policy: it does not fabricate a slot ending at a nonexistent or ambiguous midnight, even when business-time fragments are usable on either side.
+
+Invalid configuration raises `WorkdayConfigurationException`, including malformed exact dates or seasons, unsupported season keys, reversed/overlapping ranges, duplicate normalized weekdays, invalid window shapes, non-boolean overnight enablement, and disallowed boundaries. Evaluating invalid scheduled local boundaries also fails explicitly with profile/date/boundary context. Profiles with none of the three new keys keep the legacy validation, parsing, precision, provider lookup behavior, and calculation path.
+
+Normalized schedule definitions are reused per calculator where practical. Date traversal remains bounded; no minute-by-minute provider loading, new provider construction inside loops, global mutable cache, or persistent cache is introduced. Holiday-provider behavior remains authoritative: the existing `DatabaseHolidayProvider` memoizes recurring rules and queried profile/date special dates for the calculator/provider lifetime. Obtain a fresh calculator to observe edits to already-read database dates/rules or changed profile configuration. No effective-window cache is introduced; the enhanced config-provider path caches only successful validation of static profile settings.
+
+### Existing Delivery Planning And Slot APIs
+
+The same Phase 02 API can prepare overnight and hand off after midnight. This plan ends at readiness/transfer, not physical delivery:
+
+```php
+$overnightPlan = [
+    'timezone' => 'UTC',
+    'profile_timezones' => ['night-demo' => 'UTC', 'night-carrier-demo' => 'UTC'],
+    'stages' => [
+        ['id' => 'ready_for_handoff', 'type' => 'work', 'profile' => 'night-demo', 'minutes' => 180],
+        ['id' => 'handoff', 'type' => 'handoff', 'profiles' => ['night-demo', 'night-carrier-demo']],
+    ],
+];
+$overnightResult = Workday::planDelivery('2026-11-02T23:00:00Z', $overnightPlan);
+// Work completes and both calendars permit handoff on November 3 at 02:00 UTC.
+
+$nightSlotOptions = [
+    'profile' => 'night-demo',
+    'timezone' => 'UTC',
+    'days' => 2,
+    'duration_minutes' => 120,
+    'step_minutes' => 60,
+    'min_notice_minutes' => 0,
+    'max_slots' => 20,
+];
+$nightSlots = Workday::deliverySlots('2026-11-02T21:00:00Z', $nightSlotOptions);
+// November 2: 22:00–24:00.
+// November 3: 00:00–02:00, 01:00–03:00, 02:00–04:00, 03:00–05:00, 04:00–06:00.
+
+$specialSlots = Workday::deliverySlots('2026-11-02T08:00:00Z', array_replace(
+    $nightSlotOptions,
+    ['profile' => 'hours-demo', 'days' => 1],
+)); // Exactly 10:00–12:00.
+```
+
+Phase 01 cutoff remains independent. Phase 02 work/handoff uses effective windows automatically, while `business_days` remains calendar-date based. Phase 03 uses exact-date/seasonal windows and normalized overnight fragments, preserving fixed duration, per-window grids, notice, UTC output, date limits, and result limits.
+
+Slots still occupy one daily window: 22:00–24:00 is permitted when midnight is representable, including on the final requested date because no positive time occupies the next date. A single 23:00–01:00 slot is not offered. Early-morning carry-in starts its own grid at `00:00`; separate touching windows are not joined to create a longer slot. Existing conservative DST filtering remains in effect. Slots are calendar-eligible choices, not capacity guarantees or reservations.
+
+### Ten Manual Checks
+
+Use the complete dedicated UTC fixture above. All dates below are in 2026. Inspect window objects with `array_map(static fn ($window) => $window->toArray(), $calculator->workingWindowsFor($date))` when needed.
+
+| Check | Tinker call / setup | Expected result |
+|---|---|---|
+| 1. Weekly schedule | `$day->workingWindowsFor($utc('2026-12-07'))` | Regular Monday 09:00–17:00. |
+| 2. Short exact date | `$day->workingWindowsFor($utc('2026-11-02'))` | 10:00–12:00, taking precedence over seasonal Monday hours. |
+| 3. Empty exact date | `$day->workingWindowsFor($utc('2026-11-03'))`; `$day->isBusinessDay($utc('2026-11-03'))` | No new windows; still a business date. The next working instant after 08:00 is November 4, 09:00. |
+| 4. Extended season | `$day->workingWindowsFor($utc('2026-11-09'))` | Monday 08:00–20:00. Friday November 6 has no new shifts because its seasonal entry is `[]`. |
+| 5. After season | `$day->workingWindowsFor($utc('2026-12-07'))` | Return to 09:00–17:00. |
+| 6. Overnight fragments | Inspect `$night` on November 2 and 3; check 22:00 and 06:00 | `22:00–24:00`, then `00:00–06:00`; opening included, closing excluded. |
+| 7. Midnight arithmetic | The `addBusinessMinutes()` / `diffBusinessMinutes()` calls above | November 3, 02:00 for 180 minutes; difference to 03:00 is 240 minutes. |
+| 8. Closed receiving date | `$night->isBusinessDay($utc('2026-11-07'))`; `$night->isBusinessTime($utc('2026-11-07 02:00'))` | `false`, then `true`; Saturday's empty override does not cancel Friday's incoming shift. |
+| 9. Overnight planning | Inspect `$overnightResult->stages` | Preparation completes and handoff occurs November 3, 02:00; both profiles are open. |
+| 10. Exceptional/overnight slots | Inspect `$specialSlots->toArray()` and `$nightSlots->toArray()` | One 10:00–12:00 special-date slot; six night-fragment slots listed above; no 23:00–01:00 slot. |
+
+Restore the session using `config(['workdays' => $scheduleOriginalConfig]);`. These calculations do not reserve capacity or write records. Do not modify production holiday data for testing. Annual recurring seasons, schedule administration, holiday synchronization, automatic regional timezone assignment, reservations, and capacity management remain application responsibilities or outside this feature.
+
 ## Order Cut-Off Policy
 
 `resolveCutoff()` assigns an order-received timestamp to a business date using the selected profile's calendar and cut-off. Same-day eligibility means that the local date is a business day and the timestamp is strictly before its enabled cut-off. The caller must supply a timestamp; there is no implicit `now()` fallback.
@@ -876,7 +1052,7 @@ Configure the corresponding datetime/JSON casts in the consuming application. St
 
 Use the existing database/chain setup and migrations when those holiday providers are selected. Planning adds no database schema or persistent cache, and existing API paths do not activate it.
 
-Capacity, reservations, carrier integrations, automatic courier/address routing, real-time availability, and physical shipment creation/tracking remain application responsibilities. This phase does not add overnight working shifts or one-off date-specific opening-hour schedules. The result describes only completion of the configured final stage; the stage name `final_delivery` does not prove physical arrival.
+Capacity, reservations, carrier integrations, automatic courier/address routing, real-time availability, and physical shipment creation/tracking remain application responsibilities. Opted-in profiles also use the special, seasonal, and normalized overnight schedules described above. The result describes only completion of the configured final stage; the stage name `final_delivery` does not prove physical arrival.
 
 ### Manual Verification Checklist
 
@@ -985,7 +1161,7 @@ Supply the actual service calendar's timezone consistently with your Phase 02 `p
 
 ### Boundaries, Alignment, And Calendars
 
-Every slot is half-open, `[start, end)`, and fits wholly inside one working window on one requested local date. It can start at opening and end exactly at closing; it cannot start at closing, bridge lunch, cross into the next window, or cross a local date. With 09:00–12:00 and 13:00–17:00, two-hour slots 10:00–12:00 and 15:00–17:00 are valid; 11:00–13:00, 12:00–14:00, and 16:00–18:00 are invalid.
+Every slot is half-open, `[start, end)`, and fits wholly inside one working window on one requested local date. It can start at opening and end exactly at closing; it cannot start at closing, bridge lunch, cross into the next window, or occupy positive time on a second local date. An opted-in effective window may end at `24:00`, allowing a slot to end exactly at next midnight. With 09:00–12:00 and 13:00–17:00, two-hour slots 10:00–12:00 and 15:00–17:00 are valid; 11:00–13:00, 12:00–14:00, and 16:00–18:00 are invalid.
 
 Candidate starts follow each window's own opening plus `n * step_minutes`. The grid restarts at an afternoon opening. Readiness filters this fixed grid; it does not shift the grid to arbitrary input seconds. For example, a 90-minute notice after 08:00 gives 09:30 eligibility and a first two-hour slot of 10:00–12:00. Different requests seconds apart retain the same aligned starts. Step may be shorter than duration, so returned choices can overlap each other; they are alternative intervals, not reserved appointments.
 
@@ -997,7 +1173,7 @@ At most `days` date labels are considered, windows are retrieved once per existi
 
 Candidate boundaries are formed from local wall-clock dates and times, then checked before conversion to immutable UTC. Nonexistent or ambiguous slot start/end boundaries are skipped; a missing 02:30 is never silently shifted to 03:30. Slots crossing a timezone offset transition are skipped. Valid unambiguous candidates before or after the transition remain usable, provided their actual elapsed duration equals `duration_minutes` and they stay inside the window. A fully skipped civil date, such as `Pacific/Apia` on December 30, 2011, generates no phantom slots.
 
-This conservative policy intentionally offers fewer choices around transitions. It does not implement overnight shifts or a generalized DST scheduling engine. Results are deterministic for the same inputs, calendar data, and timezone database.
+This conservative policy intentionally offers fewer choices around transitions. Opted-in overnight schedules are consumed as daily fragments; individual slots still do not cross midnight, and no generalized DST scheduling engine is provided. Results are deterministic for the same inputs, calendar data, and timezone database.
 
 ### Phase 02 Readiness Integration
 
@@ -1080,7 +1256,7 @@ Use the dedicated Tinker fixture above, restoring `workdays.profiles.slots-demo`
 
 Run the readiness integration and confirm every slot begins at or after its plan's completion. Inspect UTC and local fields, and confirm these calls create no booking, reservation, database write, or notification. Restore the session's settings with `config(['workdays' => $slotOriginalConfig]);`. Use test-only config and calendars rather than modifying production holiday records.
 
-The application must revalidate eligibility and remaining capacity during booking, enforce its own transactional reservation and concurrency rules, and decide what customer promise it can make. This phase evaluates one serving profile per call; whole-interval availability intersection across multiple profiles is outside its scope. Date-specific opening-hour exceptions and overnight shifts are planned separately. No frontend, routes, controllers, notifications, background jobs, order models, shipment models, or booking storage are added.
+The application must revalidate eligibility and remaining capacity during booking, enforce its own transactional reservation and concurrency rules, and decide what customer promise it can make. This phase evaluates one serving profile per call; whole-interval availability intersection across multiple profiles is outside its scope. Special/seasonal hours and overnight shifts are available through optional profile settings; slots remain inside their effective daily windows. No frontend, routes, controllers, notifications, background jobs, order models, shipment models, or booking storage are added.
 
 ## Carbon Macros
 

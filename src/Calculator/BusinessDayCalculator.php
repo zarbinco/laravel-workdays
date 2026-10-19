@@ -23,6 +23,7 @@ use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
 use Zarbinco\LaravelWorkdays\Support\WeekdayNormalizer;
 use Zarbinco\LaravelWorkdays\Support\WorkingHours;
+use Zarbinco\LaravelWorkdays\Support\WorkingTimeBoundary;
 
 final class BusinessDayCalculator
 {
@@ -39,6 +40,8 @@ final class BusinessDayCalculator
 
     private ?WorkingHours $workingHours = null;
 
+    private readonly bool $enhancedWorkingHours;
+
     /**
      * @param  array<string, mixed>  $profileConfig
      */
@@ -53,6 +56,8 @@ final class BusinessDayCalculator
     ) {
         ProfileConfigValidator::validate($profile, $profileConfig);
         ProfileConfigValidator::validateMaxScanDays($maxScanDays);
+
+        $this->enhancedWorkingHours = WorkingHours::hasEnhancedConfig($profileConfig);
 
         $this->jalaliCalendar = $jalaliCalendar ?? new JalaliCalendarAdapter;
         $this->hijriCalendar = $hijriCalendar ?? new HijriCalendarAdapter;
@@ -212,6 +217,11 @@ final class BusinessDayCalculator
     {
         $date = $this->toDateTime($date);
         $workingHours = $this->workingHours();
+
+        if ($this->enhancedWorkingHours) {
+            return $workingHours->effective()->windowsFor($date, $this->isBusinessDate(...), $this->matchesExtraWorkingDay(...));
+        }
+
         $isExtraWorkingDay = $this->matchesExtraWorkingDay($date);
 
         if (! $this->isBusinessDate($date)) {
@@ -236,6 +246,10 @@ final class BusinessDayCalculator
     public function nextBusinessTime(string|DateTimeInterface $datetime): CarbonImmutable
     {
         $datetime = $this->toDateTime($datetime);
+
+        if ($this->enhancedWorkingHours) {
+            return $this->seekEffectiveBusinessTime($datetime, 1);
+        }
 
         if ($this->isBusinessTime($datetime)) {
             return $datetime;
@@ -266,6 +280,10 @@ final class BusinessDayCalculator
     public function previousBusinessTime(string|DateTimeInterface $datetime): CarbonImmutable
     {
         $datetime = $this->toDateTime($datetime);
+
+        if ($this->enhancedWorkingHours) {
+            return $this->seekEffectiveBusinessTime($datetime, -1);
+        }
 
         if ($this->isBusinessTime($datetime)) {
             return $datetime;
@@ -307,6 +325,10 @@ final class BusinessDayCalculator
 
         if ($minutes === 0) {
             return $datetime;
+        }
+
+        if ($this->enhancedWorkingHours) {
+            return $this->addEffectiveBusinessMinutes($datetime, $minutes);
         }
 
         $current = $this->isBusinessTime($datetime) ? $datetime : $this->nextBusinessTime($datetime);
@@ -352,6 +374,10 @@ final class BusinessDayCalculator
 
         $start = $this->toDateTime($start);
         $end = $this->toDateTime($end);
+
+        if ($this->enhancedWorkingHours) {
+            return $this->diffEffectiveBusinessMinutes($start, $end->setTimezone($start->getTimezone()));
+        }
 
         if ($start->equalTo($end)) {
             return 0;
@@ -671,12 +697,131 @@ final class BusinessDayCalculator
 
     private function windowStart(CarbonImmutable $date, TimeWindow $window): CarbonImmutable
     {
+        if ($this->enhancedWorkingHours) {
+            return WorkingTimeBoundary::at($this->profile, $date->toDateString(), $window->startMinutes(), $date->getTimezone(), $window->startMinutes() === 0);
+        }
+
         return $date->startOfDay()->addMinutes($window->startMinutes());
     }
 
     private function windowEnd(CarbonImmutable $date, TimeWindow $window): CarbonImmutable
     {
+        if ($this->enhancedWorkingHours) {
+            return WorkingTimeBoundary::at($this->profile, $date->toDateString(), $window->endMinutes(), $date->getTimezone(), $window->endMinutes() === 1440);
+        }
+
         return $date->startOfDay()->addMinutes($window->endMinutes());
+    }
+
+    private function seekEffectiveBusinessTime(CarbonImmutable $datetime, int $direction): CarbonImmutable
+    {
+        $firstLabel = $datetime->toDateString();
+
+        for ($day = 0; $day <= $this->maxScanDays; $day++) {
+            $date = WorkingTimeBoundary::date(WorkingTimeBoundary::labelAfter($firstLabel, $day * $direction), $datetime->getTimezone());
+
+            if ($date === null) {
+                continue;
+            }
+
+            $windows = $this->workingWindowsFor($date);
+            $windows = $direction === -1 ? array_reverse($windows) : $windows;
+
+            foreach ($windows as $window) {
+                $start = $this->windowStart($date, $window);
+                $end = $this->windowEnd($date, $window);
+
+                if ($datetime->greaterThanOrEqualTo($start) && $datetime->lessThan($end)) {
+                    return $datetime;
+                }
+
+                if ($direction === 1 && $datetime->lessThan($start)) {
+                    return $start;
+                }
+
+                if ($direction === -1 && $datetime->greaterThanOrEqualTo($end)) {
+                    // Preserve the established previousBusinessTime closing-boundary convention.
+                    return $end->setTimezone('UTC')->subSecond()->setTimezone($datetime->getTimezone());
+                }
+            }
+        }
+
+        $this->throwUnableToResolveBusinessTime();
+    }
+
+    private function addEffectiveBusinessMinutes(CarbonImmutable $datetime, int $minutes): CarbonImmutable
+    {
+        $current = $this->nextBusinessTime($datetime);
+        $remainingMinutes = $minutes;
+        $remainingFraction = 0;
+
+        while ($remainingMinutes > 0 || $remainingFraction > 0) {
+            $end = $this->currentWindowEnd($current);
+            $available = $this->elapsedMicroseconds($current, $end);
+            $wholeMinutes = intdiv($available, 60000000);
+            $fraction = $available % 60000000;
+
+            if ($remainingMinutes < $wholeMinutes || ($remainingMinutes === $wholeMinutes && $remainingFraction <= $fraction)) {
+                // The product is bounded by one daily interval, even for a huge requested duration.
+                return $current->setTimezone('UTC')->addMicroseconds($remainingMinutes * 60000000 + $remainingFraction)->setTimezone($datetime->getTimezone());
+            }
+
+            $remainingMinutes -= $wholeMinutes;
+            $remainingFraction -= $fraction;
+
+            if ($remainingFraction < 0) {
+                $remainingMinutes--;
+                $remainingFraction += 60000000;
+            }
+
+            $current = $this->nextBusinessTime($end);
+        }
+
+        return $current;
+    }
+
+    private function diffEffectiveBusinessMinutes(CarbonImmutable $start, CarbonImmutable $end): int
+    {
+        if ($start->greaterThan($end)) {
+            return -$this->diffEffectiveBusinessMinutes($end, $start);
+        }
+
+        if ($start->equalTo($end)) {
+            return 0;
+        }
+
+        $total = 0;
+        $lastLabel = $end->toDateString();
+
+        for ($label = $start->toDateString(); $label <= $lastLabel; $label = WorkingTimeBoundary::labelAfter($label, 1)) {
+            $date = WorkingTimeBoundary::date($label, $start->getTimezone());
+
+            if ($date === null) {
+                continue;
+            }
+
+            if ($date->greaterThanOrEqualTo($end)) {
+                break; // The exclusive endpoint contributes no time on its receiving date.
+            }
+
+            foreach ($this->workingWindowsFor($date) as $window) {
+                $windowStart = $this->windowStart($date, $window);
+                $windowEnd = $this->windowEnd($date, $window);
+                $segmentStart = $start->greaterThan($windowStart) ? $start : $windowStart;
+                $segmentEnd = $end->lessThan($windowEnd) ? $end : $windowEnd;
+
+                if ($segmentEnd->greaterThan($segmentStart)) {
+                    $total += $this->elapsedMicroseconds($segmentStart, $segmentEnd);
+                }
+            }
+        }
+
+        return intdiv($total, 60000000);
+    }
+
+    private function elapsedMicroseconds(CarbonImmutable $start, CarbonImmutable $end): int
+    {
+        return ($end->getTimestamp() - $start->getTimestamp()) * 1000000 + (int) $end->format('u') - (int) $start->format('u');
     }
 
     private function currentWindowEnd(CarbonImmutable $datetime): CarbonImmutable

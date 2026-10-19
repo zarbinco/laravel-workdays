@@ -51,6 +51,7 @@ final readonly class DeliveryPlanner
         $lastDateLabel = $lastDate->toDateString();
         $horizonEnd = $this->horizonEnd($lastDate, $timezone);
         $calculators = [];
+        $overnightProfiles = [];
 
         foreach ($plan['stages'] as $stage) {
             foreach ($this->stageProfiles($stage) as $profile) {
@@ -62,6 +63,8 @@ final readonly class DeliveryPlanner
                         // One plan date can reach a second profile-local date near zone boundaries.
                         $scanLimit = max($limit, (int) $firstLocalDate->diffInDays($lastLocalDate));
                         $calculators[$profile] = ($this->resolveCalculator)($profile, $scanLimit);
+                        $profileConfigs = config('workdays.profiles', []);
+                        $overnightProfiles[$profile] = ($profileConfigs[$profile]['allow_overnight_working_hours'] ?? false) === true;
                     } catch (InvalidArgumentException $exception) {
                         throw new WorkdayConfigurationException($this->stageContext($stage).': '.$exception->getMessage(), previous: $exception);
                     } catch (RuntimeException $exception) {
@@ -115,7 +118,7 @@ final readonly class DeliveryPlanner
                 $this->assertWithinHorizon($cursor, $timezone, $lastDateLabel);
 
                 [$startedAt, $completedAt] = match ($stage['type']) {
-                    'work' => $this->work($cursor, $calculators[$profiles[0]], $plan['profile_timezones'][$profiles[0]], $stage['minutes'], $horizonEnd),
+                    'work' => $this->work($cursor, $calculators[$profiles[0]], $plan['profile_timezones'][$profiles[0]], $stage['minutes'], $horizonEnd, $overnightProfiles[$profiles[0]]),
                     'handoff' => $this->handoff($cursor, $profiles, $calculators, $plan['profile_timezones'], $timezone, $lastDateLabel),
                     'business_days' => [$cursor, $this->businessDays($cursor, $calculators[$profiles[0]], $plan['profile_timezones'][$profiles[0]], $stage['days'], $horizonEnd)],
                 };
@@ -194,7 +197,7 @@ final readonly class DeliveryPlanner
     /**
      * @return array{CarbonImmutable, CarbonImmutable}
      */
-    private function work(CarbonImmutable $cursor, BusinessDayCalculator $calculator, string $timezone, int $minutes, CarbonImmutable $horizonEnd): array
+    private function work(CarbonImmutable $cursor, BusinessDayCalculator $calculator, string $timezone, int $minutes, CarbonImmutable $horizonEnd, bool $overnight): array
     {
         $start = $calculator->nextBusinessTime($cursor->setTimezone($timezone));
 
@@ -203,7 +206,7 @@ final readonly class DeliveryPlanner
         }
 
         if ($minutes > 0) {
-            $this->assertWorkCapacity($start, $calculator, $minutes, $horizonEnd->setTimezone($timezone));
+            $this->assertWorkCapacity($start, $calculator, $minutes, $horizonEnd->setTimezone($timezone), $overnight);
             $completion = $calculator->addBusinessMinutes($start, $minutes);
         } else {
             $completion = $start;
@@ -212,7 +215,7 @@ final readonly class DeliveryPlanner
         return [$start->setTimezone('UTC'), $completion->setTimezone('UTC')];
     }
 
-    private function assertWorkCapacity(CarbonImmutable $start, BusinessDayCalculator $calculator, int $minutes, CarbonImmutable $end): void
+    private function assertWorkCapacity(CarbonImmutable $start, BusinessDayCalculator $calculator, int $minutes, CarbonImmutable $end, bool $overnight): void
     {
         // Bound the legacy duration loop before calling it, without reimplementing minute arithmetic.
         // Stop as soon as enough capacity exists; short stages do not scan the entire horizon.
@@ -226,7 +229,7 @@ final readonly class DeliveryPlanner
                 throw new RuntimeException('Working-capacity date search made no progress.');
             }
 
-            $sliceEnd = $nextDate->subMicrosecond();
+            $sliceEnd = $overnight ? $nextDate : $nextDate->subMicrosecond();
             $sliceEnd = $sliceEnd->lessThan($end) ? $sliceEnd : $end;
             $available = $calculator->diffBusinessMinutes($probe, $sliceEnd);
 
@@ -236,6 +239,13 @@ final readonly class DeliveryPlanner
 
             $remaining -= $available;
             $probe = $nextDate;
+        }
+
+        // Daily integer totals can discard fractional minutes at both the initial cursor
+        // and a profile-local horizon boundary. Recheck only a failing overnight request
+        // against one aggregate interval; ordinary short stages still stop immediately.
+        if ($overnight && $calculator->diffBusinessMinutes($start, $end) >= $minutes) {
+            return;
         }
 
         throw new RuntimeException('Insufficient business minutes within the global planning horizon.');

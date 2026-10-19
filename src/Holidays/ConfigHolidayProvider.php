@@ -9,14 +9,18 @@ use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Data\Holiday;
 use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
+use Zarbinco\LaravelWorkdays\Support\WorkingHours;
 
-final readonly class ConfigHolidayProvider implements HolidayProviderInterface
+final class ConfigHolidayProvider implements HolidayProviderInterface
 {
+    /** @var array<string, array<string, mixed>> */
+    private array $validatedScheduleProfiles = [];
+
     /**
      * @param  array<string, array<string, mixed>>  $profiles
      */
     public function __construct(
-        private array $profiles,
+        private readonly array $profiles,
     ) {}
 
     public function recurringHolidays(string $profile, string $calendar): array
@@ -110,6 +114,13 @@ final readonly class ConfigHolidayProvider implements HolidayProviderInterface
             throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $profile));
         }
 
-        return ProfileConfigValidator::validate($profile, $this->profiles[$profile]);
+        $config = $this->profiles[$profile];
+
+        if (is_array($config) && WorkingHours::hasEnhancedConfig($config)) {
+            // Only immutable profile-definition validation is memoized, never calendar answers.
+            return $this->validatedScheduleProfiles[$profile] ??= ProfileConfigValidator::validate($profile, $config);
+        }
+
+        return ProfileConfigValidator::validate($profile, $config);
     }
 }
