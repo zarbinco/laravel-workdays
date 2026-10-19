@@ -17,18 +17,23 @@ use Zarbinco\LaravelWorkdays\Data\DeliveryStageResult;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Support\CutoffDateTimeNormalizer;
 use Zarbinco\LaravelWorkdays\Support\CutoffPolicy;
+use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
 
 final readonly class DeliveryPlanner
 {
     private Closure $resolveCalculator;
 
+    private ?Closure $resolveProfileConfig;
+
     /**
      * @param  callable(string, int): BusinessDayCalculator  $resolveCalculator
+     * @param  null|callable(string): array<string, mixed>  $resolveProfileConfig
      */
-    public function __construct(callable $resolveCalculator)
+    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
+        $this->resolveProfileConfig = $resolveProfileConfig === null ? null : Closure::fromCallable($resolveProfileConfig);
     }
 
     /**
@@ -52,6 +57,7 @@ final readonly class DeliveryPlanner
         $horizonEnd = $this->horizonEnd($lastDate, $timezone);
         $calculators = [];
         $overnightProfiles = [];
+        $effectiveConfigs = [];
 
         foreach ($plan['stages'] as $stage) {
             foreach ($this->stageProfiles($stage) as $profile) {
@@ -63,8 +69,8 @@ final readonly class DeliveryPlanner
                         // One plan date can reach a second profile-local date near zone boundaries.
                         $scanLimit = max($limit, (int) $firstLocalDate->diffInDays($lastLocalDate));
                         $calculators[$profile] = ($this->resolveCalculator)($profile, $scanLimit);
-                        $profileConfigs = config('workdays.profiles', []);
-                        $overnightProfiles[$profile] = ($profileConfigs[$profile]['allow_overnight_working_hours'] ?? false) === true;
+                        $effectiveConfigs[$profile] = $this->profileConfig($profile);
+                        $overnightProfiles[$profile] = ($effectiveConfigs[$profile]['allow_overnight_working_hours'] ?? false) === true;
                     } catch (InvalidArgumentException $exception) {
                         throw new WorkdayConfigurationException($this->stageContext($stage).': '.$exception->getMessage(), previous: $exception);
                     } catch (RuntimeException $exception) {
@@ -81,8 +87,7 @@ final readonly class DeliveryPlanner
             $first = $plan['stages'][0];
 
             try {
-                $profileConfigs = config('workdays.profiles', []);
-                $profileConfig = is_array($profileConfigs) ? ($profileConfigs[$plan['cutoff_profile']] ?? null) : null;
+                $profileConfig = $effectiveConfigs[$plan['cutoff_profile']];
 
                 if (! is_array($profileConfig)) {
                     throw new WorkdayConfigurationException(sprintf('The cutoff profile [%s] configuration is not available.', $plan['cutoff_profile']));
@@ -140,6 +145,21 @@ final readonly class DeliveryPlanner
         }
 
         return new DeliveryPlanResult($timezone, $receivedAt, $planningStartAt, $cutoffResult, $results, $cursor);
+    }
+
+    private function profileConfig(string $profile): mixed
+    {
+        if ($this->resolveProfileConfig !== null) {
+            return ($this->resolveProfileConfig)($profile);
+        }
+
+        // Preserve one-argument constructor usages, resolving only inherited metadata.
+        $profiles = config('workdays.profiles', []);
+        $profileConfig = is_array($profiles) ? ($profiles[$profile] ?? null) : null;
+
+        return is_array($profileConfig) && array_key_exists('extends', $profileConfig)
+            ? (new ProfileConfigResolver($profiles))->resolve($profile)
+            : $profileConfig;
     }
 
     private function normalizeInput(string|DateTimeInterface $receivedAt, string $timezone): CarbonImmutable

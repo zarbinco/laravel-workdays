@@ -163,6 +163,216 @@ Profiles live in `config/workdays.php`:
 
 `max_scan_days` protects business-day scans from running forever when a profile has no possible business days. It must be a positive integer.
 
+## Profile Inheritance And Context Routing
+
+Shared profiles avoid copying calendars and schedules for every warehouse, seller, or carrier. A child profile can inherit a common definition and replace only local differences. Separately, application-supplied context can select one configured profile through explicit routing rules. Neither feature discovers warehouses, sellers, carriers, regions, or timezones from application models or external services.
+
+Existing `Workday::profile($name)` calls support inherited profiles. The new `Workday::resolveProfile($context)` returns an immutable selection; `Workday::profileFor($context)` applies the same selection rules and returns the existing `BusinessDayCalculator`. Both methods are available on the facade and `WorkdayManager`. Routing is opt-in, and shipped configuration does not enable it automatically.
+
+### Complete E-Commerce Configuration
+
+This dedicated local `php artisan tinker` fixture defines the profiles and rules used below. In an application, put the equivalent definitions in `config/workdays.php`. It uses config storage and creates no database rows, bookings, reservations, or notifications. Preserve the session's original configuration for restoration.
+
+```php
+use Carbon\CarbonImmutable;
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$routingOriginalConfig = config('workdays');
+$routingWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$routingProfiles = [
+    'route_base' => [
+        'weekends' => ['Saturday', 'Sunday'],
+        'holidays' => ['gregorian' => ['01-01' => 'New Year'], 'jalali' => [], 'hijri' => []],
+        'custom_holidays' => [],
+        'extra_working_days' => [],
+        'working_hours' => array_fill_keys($routingWeekdays, [['09:00', '17:00']]),
+        'cutoff' => [
+            'timezone' => 'Asia/Tehran',
+            'time' => '14:00',
+            'weekdays' => ['Friday' => null],
+        ],
+    ],
+    'route_regional' => [
+        'extends' => 'route_base',
+        'custom_holidays' => ['2026-11-04' => 'Regional closure'],
+    ],
+    'route_tehran' => [
+        'extends' => 'route_regional',
+        'working_hours' => ['thu' => [['09:00', '12:00']]],
+        'special_working_hours' => ['2026-11-10' => [['10:00', '13:00']]],
+        'cutoff' => ['time' => '13:00'],
+    ],
+    'route_isfahan' => [
+        'extends' => 'route_base',
+        'custom_holidays' => ['2026-11-12' => 'Local closure'],
+    ],
+    'route_seller' => ['extends' => 'route_base', 'weekends' => []],
+    'route_carrier' => [
+        'extends' => 'route_base',
+        'working_hours' => array_fill_keys($routingWeekdays, [['12:00', '18:00']]),
+    ],
+    'route_night_base' => [
+        'extends' => 'route_base',
+        'allow_overnight_working_hours' => true,
+        'working_hours' => [
+            'Monday' => [['22:00', '06:00']],
+            'Tuesday' => [], 'Wednesday' => [], 'Thursday' => [], 'Friday' => [],
+        ],
+    ],
+    'route_night' => ['extends' => 'route_night_base'],
+];
+
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 14,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $routingProfiles),
+    'workdays.profile_routing' => [
+        'fallback_profile' => 'route_base',
+        'rules' => [
+            ['id' => 'general_warehouse', 'match' => ['kind' => 'warehouse'], 'profile' => 'route_base'],
+            ['id' => 'tehran_region', 'match' => ['kind' => 'warehouse', 'region' => 'tehran'], 'profile' => 'route_tehran'],
+            ['id' => 'tehran_warehouse', 'match' => ['kind' => 'warehouse', 'region' => 'tehran', 'warehouse_id' => 42], 'profile' => 'route_tehran'],
+            ['id' => 'seller_calendar', 'match' => ['kind' => 'seller', 'seller_id' => 7], 'profile' => 'route_seller'],
+            ['id' => 'carrier_express', 'match' => ['kind' => 'carrier', 'carrier' => 'express'], 'profile' => 'route_carrier'],
+        ],
+    ],
+]);
+
+$warehouseContext = ['kind' => 'warehouse', 'warehouse_id' => 42, 'region' => 'tehran'];
+$warehouse = Workday::resolveProfile($warehouseContext);
+$warehouse->toArray();
+// ['profile' => 'route_tehran', 'source' => 'rule', 'rule_id' => 'tehran_warehouse']
+
+$selectedCalculator = Workday::profileFor($warehouseContext);
+$directCalculator = Workday::profile($warehouse->profile);
+$local = static fn (string $value): CarbonImmutable => CarbonImmutable::parse($value, 'Asia/Tehran');
+
+$selectedCalculator->isHoliday($local('2026-01-01')); // true: inherited config holiday.
+$selectedCalculator->workingWindowsFor($local('2026-11-05')); // Thursday 09:00–12:00.
+Workday::resolveProfile(['kind' => 'seller', 'seller_id' => 7])->profile; // route_seller.
+Workday::resolveProfile(['kind' => 'carrier', 'carrier' => 'express'])->profile; // route_carrier.
+
+// The same selection API without the facade:
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)->resolveProfile($warehouseContext);
+```
+
+### Inheritance And Exact Merge Rules
+
+`extends` must be a non-empty string naming an existing profile. Multi-level chains are supported, with at most 16 profiles including the selected child and root. Missing parents, invalid definitions, self-reference, cycles, and excessive depth fail with useful profile/chain context. Only the selected profile and necessary ancestors are resolved; unrelated profiles are not eagerly resolved. Global Laravel configuration is not changed.
+
+An omitted child key inherits its parent. An explicit value follows the section-specific rules below; generic recursive array merging is not used.
+
+| Section | Child override behavior |
+|---|---|
+| `weekends` | Replace the complete list; `[]` means no weekend days. |
+| `holidays` | Merge by calendar, then holiday key. An empty calendar map clears that calendar; `holidays => []` clears all inherited recurring calendars. Existing supported `null` labels remain labels, not deletions. |
+| `custom_holidays`, `extra_working_days`, `special_working_hours` | Merge by exact Gregorian date. Replace the complete value for a supplied date; do not merge its window-list elements. An empty whole section clears inherited entries. A special date with `[]` still means no new shifts. |
+| `working_hours` | Merge by normalized ISO weekday. Each child weekday replaces the complete inherited window list; an empty weekday clears its weekly windows. An empty whole section clears all inherited weekly hours. Existing extra-working-day fallback still applies where eligible. |
+| `extra_working_day_hours` | Replace the entire window list, including an explicit empty list. |
+| `seasonal_working_hours` | Replace the entire ordered list; `[]` clears inherited seasons. Phase 04 season validation still applies. |
+| `allow_overnight_working_hours` | Inherit when omitted; otherwise replace the strict boolean. Disabling it while inherited windows still require overnight support is an error. `false` alone retains the Microfix 01 legacy path. |
+| `cutoff` | Merge supported policy keys. Inherit omitted `timezone`/`time`; merge `weekdays` by normalized weekday, preserving explicit `null`. An empty `cutoff.weekdays` map clears inherited weekday overrides. |
+| Other existing profile fields | Inherit omitted fields; a supplied child value replaces the entire value. Arbitrary indexed arrays are never merged recursively. |
+
+For example, a parent `Monday` and child integer key `1` identify the same weekday. The child replaces Monday's windows, even when it uses a different accepted alias. Duplicate normalized aliases within one layer are rejected; the same rule applies to cutoff weekday maps when the cutoff policy is used. Empty weekly windows close an ordinary date, but an explicitly reopened extra working day can still use `extra_working_day_hours`. Only exact-date or explicit seasonal weekday empty overrides suppress that fallback, preserving Phase 04 precedence. Hours still obey existing validation after merging. Cutoff validation stays lazy: malformed cutoff configuration does not become a new dependency of ordinary day/time calls.
+
+Inheritance does not inherit top-level `default_profile`, storage settings, or timezone decisions. It preserves the selected child's original name in results, explanations, and database lookups. The fixture chain `route_base → route_regional → route_tehran` inherits the base holiday, regional closure, and all unmodified weekdays while replacing Thursday and cutoff time.
+
+### Strict Routing, Specificity, And Fallback
+
+`profile_routing` must contain exactly `fallback_profile` and an ordered `rules` list, which may be empty. Fallback and all rule targets must name configured profiles. Each rule has exactly `id`, `match`, and `profile`; IDs are unique non-empty strings, and `match` is a non-empty associative map.
+
+Match/context keys are application-defined ASCII identifiers matching `[A-Za-z_][A-Za-z0-9_]*`; they are not limited to the example fields. Values must be integers or strings other than `''`. Booleans, floats, arrays, objects, and `null` are rejected. Empty context `[]` is valid and selects fallback. All supplied context fields are validated, including fields unused by a rule.
+
+A rule matches only when every configured field exists and is strictly equal. Extra context fields are allowed, but partial matches do not qualify. `42 !== '42'`, and `'tehran' !== 'Tehran'`; no trimming, case folding, casting, or transliteration occurs, and whitespace in string values is preserved. There are no wildcard, regex, callable, or executable-expression conditions.
+
+When several rules match, the rule with the most match fields wins. Equal specificity uses configuration order: the first rule wins. No match uses the explicit `fallback_profile`, not `default_profile`. In the fixture, all three warehouse rules match the full Tehran context, so the three-field `tehran_warehouse` wins even though it appears later. Changing `warehouse_id` to the string `'42'` makes that rule fail and selects the two-field `tehran_region` instead.
+
+Missing or malformed routing configuration throws `WorkdayConfigurationException` only when the routing API is explicitly used. Invalid supplied context throws `InvalidArgumentException`. Inheritance hierarchy failures use `WorkdayConfigurationException`; validation of a selected non-inherited profile retains its existing exception types. Invalid unrelated routing settings do not break ordinary APIs that never route, and routing does not create calculators for every possible target.
+
+### Selection Result And Storage Identity
+
+`Zarbinco\LaravelWorkdays\Data\ResolvedProfile` is immutable. It exposes `profile`, `source` (`rule` or `fallback`), and `ruleId` (the selected ID, or `null` for fallback). Its `toArray()` uses only the stable keys `profile`, `source`, and `rule_id`; raw context is not included. Keep any application audit context separately under your own privacy policy.
+
+| Storage driver | Calendar behavior for a selected child |
+|---|---|
+| `config` | The existing config provider sees fully inherited recurring holidays, exact holidays, and extra working days under the child's actual name. |
+| `database` | Database rows use the selected child's name. Parent database-only holidays are **not inherited**. Config inheritance still supplies profile settings such as weekends and schedules. |
+| `chain` | Inherited config holidays under the child name combine with that child's database rules using existing chain precedence and source reporting. Parent database rows are not added. |
+
+No synthetic profile name, new model, migration, or importer behavior is introduced. Existing holiday/provider precedence and database-provider caching semantics remain unchanged. Routing merely selects a name and constructs no holiday provider or database query for that selection.
+
+### Cutoff, Delivery Plans, And Slots
+
+After stock, payment, authorization, and tenant checks in your application, explicitly resolve the configured warehouse and carrier calendars. Place the resulting names into the existing plan schema; the planner does not automatically route its stages. The profiles and routing rules in this example must already be configured, as in the fixture above.
+
+```php
+$carrier = Workday::resolveProfile(['kind' => 'carrier', 'carrier' => 'express']);
+$seller = Workday::resolveProfile(['kind' => 'seller', 'seller_id' => 7]);
+
+$cutoffDecision = $selectedCalculator->resolveCutoff('2026-11-02 12:59:59.999999');
+// Same-day eligible; inherited timezone Asia/Tehran, overridden cutoff 13:00.
+
+$routedPlan = [
+    'timezone' => 'Asia/Tehran',
+    'profile_timezones' => [$warehouse->profile => 'Asia/Tehran', $carrier->profile => 'Asia/Tehran'],
+    'cutoff_profile' => $warehouse->profile,
+    'stages' => [
+        ['id' => 'preparation', 'type' => 'work', 'profile' => $warehouse->profile, 'minutes' => 120],
+        ['id' => 'handoff', 'type' => 'handoff', 'profiles' => [$warehouse->profile, $carrier->profile]],
+    ],
+];
+$routedReadiness = Workday::planDelivery('2026-11-02 10:00', $routedPlan);
+// Preparation and handoff complete at 12:00 Tehran / 08:30 UTC.
+
+$routedSlotOptions = [
+    'profile' => $warehouse->profile,
+    'timezone' => 'Asia/Tehran',
+    'days' => 2,
+    'duration_minutes' => 120,
+    'step_minutes' => 60,
+    'min_notice_minutes' => 0,
+    'max_slots' => 20,
+];
+$routedSlots = Workday::deliverySlots($routedReadiness->estimatedCompletionAt, $routedSlotOptions);
+// First choice: 12:00–14:00 Tehran; no preparation or cutoff is reapplied.
+
+$routedSpecialSlots = Workday::deliverySlots('2026-11-10 09:00', array_replace(
+    $routedSlotOptions,
+    ['days' => 1],
+)); // Child's special date: 10:00–12:00 and 11:00–13:00 Tehran.
+
+$inheritedNight = Workday::profile('route_night');
+$inheritedNight->addBusinessMinutes($local('2026-11-02 23:00'), 180);
+// November 3, 02:00 Tehran, using inherited overnight support and Monday hours.
+```
+
+The plan intentionally ends at readiness/handoff rather than final customer delivery. Inherited cutoff and overnight metadata are respected without changing Phase 01–04 contracts. Exact-date/seasonal precedence, empty schedules, carry-in, `24:00`, slot grids, DST handling, and bounded horizons remain in force. The separate `$cutoffDecision` is an illustration; the plan performs its own single cutoff decision when `cutoff_profile` is included.
+
+Routing chooses a profile, not a timezone. It never infers one from warehouse IDs, region names, server location, or context values. Cutoff uses its effective configured policy timezone. Direct business-time calls retain their supplied datetime timezone; plans and slots still require their existing explicit timezone settings.
+
+### Isolation, Errors, And Eleven Manual Checks
+
+Only the chosen inheritance chain is merged for calculator creation, and its effective configuration is reused within that operation. Inheritance is not repeated per date or minute. There is no process-wide or persistent resolution cache, cross-context selection cache, or mutation of global configuration. Configuration changes are seen by a fresh operation/calculator rather than a stale process-wide snapshot. No extra routing work is added to unrelated legacy calls.
+
+Use the dedicated Tinker fixture; all manual dates below are in 2026 and direct datetime examples use Tehran explicitly.
+
+| Check | Call / observation | Expected result |
+|---|---|---|
+| 1. Ordinary warehouse | `Workday::resolveProfile(['kind' => 'warehouse', 'warehouse_id' => 99, 'region' => 'qom'])` | `route_base`, source `rule`, ID `general_warehouse`. |
+| 2. Specific Tehran rule | Inspect `$warehouse->toArray()` | `route_tehran`, source `rule`, ID `tehran_warehouse`; the most-specific rule wins. |
+| 3. Fallback | `Workday::resolveProfile([])->toArray()` | `route_base`, source `fallback`, `rule_id => null`. |
+| 4. Parent holiday | `$selectedCalculator->isHoliday($local('2026-01-01'))` | `true`; inherited config holiday remains visible under child identity. |
+| 5. Child Thursday | `$selectedCalculator->workingWindowsFor($local('2026-11-05'))` | 09:00–12:00. |
+| 6. Other child Thursday | `Workday::profile('route_isfahan')->workingWindowsFor($local('2026-11-05'))` | Parent's 09:00–17:00; no cross-profile state leakage. |
+| 7. Inherited cutoff | Inspect `$cutoffDecision`; resolve again at `2026-11-02 13:00` | Inherited timezone and 13:00 child cutoff; before-boundary eligible, exact-boundary ineligible. |
+| 8. Inherited night | The `route_night` addition above | November 3, 02:00; Tuesday has the incoming `00:00–06:00` fragment. |
+| 9. Routed plan | Inspect `$routedReadiness->stages` and `estimatedCompletionAt` | Warehouse and carrier names are explicit; completion 12:00 Tehran / 08:30 UTC. |
+| 10. Routed slots | Inspect `$routedSlots` and `$routedSpecialSlots` | First readiness slot 12:00–14:00; special-date choices 10:00–12:00 and 11:00–13:00. |
+| 11. Side effects | Inspect application state after these config-only calculations | No database write, reservation, booking, notification, or external request. |
+
+Restore the session with `config(['workdays' => $routingOriginalConfig]);`. Use test calendars rather than changing production holiday rows. The application must supply trusted context, configure routing policy, enforce authorization and tenant isolation, and manage actual carrier selection, capacity, transactional reservations, and booking. Selecting a carrier's calendar does not choose or book a physical carrier service.
+
 ## Weekend Names
 
 Weekends can be configured with ISO weekday numbers, English names, English short names, or Persian weekday names:
@@ -1368,6 +1578,8 @@ WorkdayRule::businessDay('iran')->message('Please choose a working day.');
 ## Public API Reference
 
 ```php
+Workday::resolveProfile($context);
+Workday::profileFor($context);
 Workday::profile('global')->isBusinessDay($date);
 Workday::profile('global')->isHoliday($date);
 Workday::profile('global')->isNonWorkingDay($date);

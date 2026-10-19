@@ -9,6 +9,8 @@ use Zarbinco\LaravelWorkdays\WorkdayManager;
 
 /**
  * @method static \Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator profile(string $profile)
+ * @method static \Zarbinco\LaravelWorkdays\Data\ResolvedProfile resolveProfile(array $context)
+ * @method static \Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator profileFor(array $context)
  * @method static \Zarbinco\LaravelWorkdays\Data\CutoffResult resolveCutoff(string|\DateTimeInterface $receivedAt)
  * @method static \Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult planDelivery(string|\DateTimeInterface $receivedAt, array $plan)
  * @method static \Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult deliverySlots(string|\DateTimeInterface $readyAt, array $options)

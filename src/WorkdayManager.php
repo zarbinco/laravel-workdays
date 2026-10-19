@@ -14,6 +14,7 @@ use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
+use Zarbinco\LaravelWorkdays\Data\ResolvedProfile;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
 use Zarbinco\LaravelWorkdays\Delivery\DeliverySlotGenerator;
@@ -21,7 +22,9 @@ use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
+use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
+use Zarbinco\LaravelWorkdays\Support\ProfileRouter;
 use Zarbinco\LaravelWorkdays\Support\StorageDriver;
 
 final class WorkdayManager
@@ -31,15 +34,53 @@ final class WorkdayManager
         return $this->calculator($profile);
     }
 
-    private function calculator(string $profile, ?int $scanLimit = null): BusinessDayCalculator
+    /** @param array<string, mixed> $context */
+    public function resolveProfile(array $context): ResolvedProfile
     {
         $profiles = $this->profiles();
+        $selection = $this->selectProfile($context, $profiles);
+        $this->effectiveProfileConfig($selection->profile, $profiles);
+
+        return $selection;
+    }
+
+    /** @param array<string, mixed> $context */
+    public function profileFor(array $context): BusinessDayCalculator
+    {
+        $profiles = $this->profiles();
+        $selection = $this->selectProfile($context, $profiles);
+        $effective = $this->effectiveProfileConfig($selection->profile, $profiles);
+
+        return $this->calculator($selection->profile, profileConfig: $effective, profiles: $profiles);
+    }
+
+    /**
+     * @param  array<string, mixed>  $context
+     * @param  array<string, mixed>  $profiles
+     */
+    private function selectProfile(array $context, array $profiles): ResolvedProfile
+    {
+        return (new ProfileRouter($profiles))->resolve($context, config('workdays.profile_routing'));
+    }
+
+    /**
+     * @param  array<string, mixed>|null  $profileConfig
+     * @param  array<string, mixed>|null  $profiles
+     */
+    private function calculator(string $profile, ?int $scanLimit = null, ?array $profileConfig = null, ?array $profiles = null): BusinessDayCalculator
+    {
+        $profiles ??= $this->profiles();
 
         if (! array_key_exists($profile, $profiles)) {
             throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $profile));
         }
 
-        $profileConfig = ProfileConfigValidator::validate($profile, $profiles[$profile]);
+        $profileConfig ??= $this->effectiveProfileConfig($profile, $profiles);
+
+        if (is_array($profiles[$profile]) && array_key_exists('extends', $profiles[$profile])) {
+            // Config holidays must see the same snapshot, under the child's actual name.
+            $profiles[$profile] = $profileConfig;
+        }
 
         return new BusinessDayCalculator(
             profile: $profile,
@@ -66,9 +107,39 @@ final class WorkdayManager
      */
     public function planDelivery(string|DateTimeInterface $receivedAt, array $plan): DeliveryPlanResult
     {
+        $profiles = null;
+        $resolved = [];
+        $resolveConfig = function (string $profile) use (&$profiles, &$resolved): array {
+            $profiles ??= $this->profiles();
+
+            return $resolved[$profile] ??= $this->effectiveProfileConfig($profile, $profiles);
+        };
+
         return (new DeliveryPlanner(
-            fn (string $profile, int $scanLimit): BusinessDayCalculator => $this->calculator($profile, $scanLimit),
+            function (string $profile, int $scanLimit) use ($resolveConfig, &$profiles): BusinessDayCalculator {
+                $effective = $resolveConfig($profile);
+
+                return $this->calculator($profile, $scanLimit, $effective, $profiles);
+            },
+            $resolveConfig,
         ))->plan($receivedAt, $plan);
+    }
+
+    /**
+     * @param  array<string, mixed>  $profiles
+     * @return array<string, mixed>
+     */
+    private function effectiveProfileConfig(string $profile, array $profiles): array
+    {
+        if (! array_key_exists($profile, $profiles)) {
+            throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $profile));
+        }
+
+        if (is_array($profiles[$profile]) && array_key_exists('extends', $profiles[$profile])) {
+            return (new ProfileConfigResolver($profiles))->resolve($profile);
+        }
+
+        return ProfileConfigValidator::validate($profile, $profiles[$profile]);
     }
 
     /**

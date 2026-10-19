@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added optional hierarchical profile inheritance with bounded parent chains, normalized weekday overrides, explicit section-aware merge/clear rules, and selected-child identity across config/database/chain storage.
+- Added deterministic context-based profile routing through `resolveProfile()` and `profileFor()`, with strict matching, specificity/configuration-order precedence, explicit fallback, and immutable `ResolvedProfile` results without raw context exposure.
+- Integrated inherited cutoff, overnight, and exceptional schedules with existing delivery planning and slot generation, preserving lazy cutoff validation and legacy paths, with focused regression tests and aligned English/Persian configuration and manual guides.
 - Added optional exact-date and inclusive seasonal working-hour overrides with explicit empty schedules, strict Gregorian validation, and deterministic calendar-first precedence.
 - Added explicitly enabled overnight and full-day schedules, normalized daily carry-in windows, overlap-safe working-minute calculations, and strict local-boundary handling across timezone transitions while preserving the legacy profile path.
 - Integrated enhanced schedules with existing delivery planning and single-day slot generation, including representable `24:00` slot endings, focused regression coverage, and aligned English/Persian configuration and manual verification guides.

@@ -92,6 +92,216 @@ Workday::addBusinessDays('2026-06-24', 2);
 
 تنظیم `max_scan_days` جلوی جست‌وجوی بی‌پایان را می‌گیرد. اگر پروفایلی طوری تنظیم شود که هیچ روز کاری پیدا نشود، پکیج بعد از این محدوده خطای روشن می‌دهد.
 
+## ارث‌بری پروفایل و انتخاب بر اساس زمینه
+
+با پروفایل مشترک لازم نیست تقویم و ساعت کاری هر انبار، فروشنده یا حمل‌کننده را دوباره بنویسی. پروفایل فرزند می‌تواند تنظیمات مشترک را به ارث ببرد و فقط تفاوت‌های محلی را عوض کند. جدا از آن، برنامه می‌تواند با اطلاعات زمینه‌ای که خودش می‌دهد، از طریق قواعد صریح یک پروفایل تنظیم‌شده را انتخاب کند. هیچ‌کدام از این قابلیت‌ها انبار، فروشنده، حمل‌کننده، منطقه یا timezone را از مدل‌های برنامه یا سرویس خارجی پیدا نمی‌کنند.
+
+فراخوانی موجود `Workday::profile($name)` از پروفایل ارث‌بر هم پشتیبانی می‌کند. متد جدید `Workday::resolveProfile($context)` نتیجه انتخاب تغییرناپذیر می‌دهد؛ `Workday::profileFor($context)` با همان قواعد انتخاب، `BusinessDayCalculator` فعلی را برمی‌گرداند. هر دو روی facade و `WorkdayManager` در دسترس‌اند. مسیریابی اختیاری است و تنظیمات پیش‌فرض پکیج آن را خودکار فعال نمی‌کنند.
+
+### تنظیمات کامل برای فروشگاه اینترنتی
+
+این نمونه جداگانه در نشست محلی `php artisan tinker`، پروفایل‌ها و قواعد مثال‌های بعد را تعریف می‌کند. در برنامه واقعی، تعریف معادل را در `config/workdays.php` بگذار. نمونه از config storage استفاده می‌کند و رکورد دیتابیس، رزرو، نوبت یا اعلان ایجاد نمی‌کند. تنظیمات قبلی نشست را برای بازگرداندن نگه دار.
+
+```php
+use Carbon\CarbonImmutable;
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$routingOriginalConfig = config('workdays');
+$routingWeekdays = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'];
+$routingProfiles = [
+    'route_base' => [
+        'weekends' => ['Saturday', 'Sunday'],
+        'holidays' => ['gregorian' => ['01-01' => 'New Year'], 'jalali' => [], 'hijri' => []],
+        'custom_holidays' => [],
+        'extra_working_days' => [],
+        'working_hours' => array_fill_keys($routingWeekdays, [['09:00', '17:00']]),
+        'cutoff' => [
+            'timezone' => 'Asia/Tehran',
+            'time' => '14:00',
+            'weekdays' => ['Friday' => null],
+        ],
+    ],
+    'route_regional' => [
+        'extends' => 'route_base',
+        'custom_holidays' => ['2026-11-04' => 'Regional closure'],
+    ],
+    'route_tehran' => [
+        'extends' => 'route_regional',
+        'working_hours' => ['thu' => [['09:00', '12:00']]],
+        'special_working_hours' => ['2026-11-10' => [['10:00', '13:00']]],
+        'cutoff' => ['time' => '13:00'],
+    ],
+    'route_isfahan' => [
+        'extends' => 'route_base',
+        'custom_holidays' => ['2026-11-12' => 'Local closure'],
+    ],
+    'route_seller' => ['extends' => 'route_base', 'weekends' => []],
+    'route_carrier' => [
+        'extends' => 'route_base',
+        'working_hours' => array_fill_keys($routingWeekdays, [['12:00', '18:00']]),
+    ],
+    'route_night_base' => [
+        'extends' => 'route_base',
+        'allow_overnight_working_hours' => true,
+        'working_hours' => [
+            'Monday' => [['22:00', '06:00']],
+            'Tuesday' => [], 'Wednesday' => [], 'Thursday' => [], 'Friday' => [],
+        ],
+    ],
+    'route_night' => ['extends' => 'route_night_base'],
+];
+
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 14,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $routingProfiles),
+    'workdays.profile_routing' => [
+        'fallback_profile' => 'route_base',
+        'rules' => [
+            ['id' => 'general_warehouse', 'match' => ['kind' => 'warehouse'], 'profile' => 'route_base'],
+            ['id' => 'tehran_region', 'match' => ['kind' => 'warehouse', 'region' => 'tehran'], 'profile' => 'route_tehran'],
+            ['id' => 'tehran_warehouse', 'match' => ['kind' => 'warehouse', 'region' => 'tehran', 'warehouse_id' => 42], 'profile' => 'route_tehran'],
+            ['id' => 'seller_calendar', 'match' => ['kind' => 'seller', 'seller_id' => 7], 'profile' => 'route_seller'],
+            ['id' => 'carrier_express', 'match' => ['kind' => 'carrier', 'carrier' => 'express'], 'profile' => 'route_carrier'],
+        ],
+    ],
+]);
+
+$warehouseContext = ['kind' => 'warehouse', 'warehouse_id' => 42, 'region' => 'tehran'];
+$warehouse = Workday::resolveProfile($warehouseContext);
+$warehouse->toArray();
+// ['profile' => 'route_tehran', 'source' => 'rule', 'rule_id' => 'tehran_warehouse']
+
+$selectedCalculator = Workday::profileFor($warehouseContext);
+$directCalculator = Workday::profile($warehouse->profile);
+$local = static fn (string $value): CarbonImmutable => CarbonImmutable::parse($value, 'Asia/Tehran');
+
+$selectedCalculator->isHoliday($local('2026-01-01')); // true: inherited config holiday.
+$selectedCalculator->workingWindowsFor($local('2026-11-05')); // Thursday 09:00–12:00.
+Workday::resolveProfile(['kind' => 'seller', 'seller_id' => 7])->profile; // route_seller.
+Workday::resolveProfile(['kind' => 'carrier', 'carrier' => 'express'])->profile; // route_carrier.
+
+// The same selection API without the facade:
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)->resolveProfile($warehouseContext);
+```
+
+### ارث‌بری و قواعد دقیق ترکیب
+
+مقدار `extends` باید رشته غیرخالی و نام یک پروفایل موجود باشد. زنجیره چندسطحی پشتیبانی می‌شود و حداکثر ۱۶ پروفایل، شامل فرزند انتخابی و ریشه، دارد. والد ناموجود، تعریف نامعتبر، ارجاع به خود، چرخه و عمق بیش از حد، با اطلاعات مفید پروفایل یا زنجیره خطا می‌دهند. فقط پروفایل انتخابی و والدهای لازم حل می‌شوند؛ پروفایل‌های نامرتبط پیشاپیش حل نمی‌شوند. تنظیمات سراسری لاراول تغییر نمی‌کند.
+
+کلیدی که فرزند ننوشته، از والد به ارث می‌رسد. مقدار صریح طبق قواعد هر بخش در جدول زیر اعمال می‌شود؛ ادغام بازگشتی عمومی آرایه‌ها استفاده نمی‌شود.
+
+| بخش | رفتار مقدار فرزند |
+|---|---|
+| `weekends` | کل فهرست جایگزین می‌شود؛ `[]` یعنی هیچ روز آخر هفته‌ای وجود ندارد. |
+| `holidays` | ابتدا برحسب تقویم و بعد کلید تعطیلی ترکیب می‌شود. نگاشت خالی یک تقویم، همان تقویم را پاک می‌کند؛ `holidays => []` همه تقویم‌های تکرارشونده ارث‌رسیده را پاک می‌کند. برچسب `null` مجاز قبلی، برچسب باقی می‌ماند و دستور حذف نیست. |
+| `custom_holidays`، `extra_working_days`، `special_working_hours` | برحسب تاریخ دقیق Gregorian ترکیب می‌شوند. مقدار کامل تاریخ فرزند جای والد می‌نشیند و اجزای فهرست پنجره‌ها ادغام نمی‌شوند. بخش کاملاً خالی، همه ورودی‌های ارث‌رسیده آن بخش را پاک می‌کند. تاریخ اختصاصی با `[]` همچنان یعنی بدون شروع شیفت جدید. |
+| `working_hours` | برحسب روز هفته ISO نرمال‌شده ترکیب می‌شود. فرزند، کل فهرست پنجره‌های همان روز را جایگزین می‌کند؛ روز خالی پنجره‌های هفتگی آن روز را پاک می‌کند. بخش کاملاً خالی، کل برنامه هفتگی ارث‌رسیده را پاک می‌کند. ساعت جایگزین روز کاری اضافی در شرایط قبلی خودش همچنان اعمال می‌شود. |
+| `extra_working_day_hours` | کل فهرست پنجره‌ها جایگزین می‌شود؛ فهرست خالی صریح هم همین حکم را دارد. |
+| `seasonal_working_hours` | کل فهرست مرتب جایگزین می‌شود؛ `[]` فصل‌های ارث‌رسیده را پاک می‌کند. اعتبارسنجی فصل فاز ۰۴ حفظ می‌شود. |
+| `allow_overnight_working_hours` | در صورت حذف ارث می‌رسد و در صورت وجود، مقدار بولی صریح جایگزین می‌شود. غیرفعال‌کردن در حالی که پنجره ارث‌رسیده به حالت شبانه نیاز دارد، خطاست. مقدار `false` به‌تنهایی همان مسیر قدیمی Microfix 01 را حفظ می‌کند. |
+| `cutoff` | کلیدهای پشتیبانی‌شده سیاست ترکیب می‌شوند. `timezone` و `time` حذف‌شده ارث می‌رسند؛ `weekdays` برحسب روز نرمال‌شده ترکیب می‌شود و `null` صریح حفظ می‌شود. نگاشت خالی `cutoff.weekdays`، تغییرهای روز هفته ارث‌رسیده را پاک می‌کند. |
+| دیگر فیلدهای موجود پروفایل | فیلد حذف‌شده ارث می‌رسد؛ مقدار صریح فرزند، کل مقدار را جایگزین می‌کند. آرایه اندیس‌دار دلخواه، بازگشتی ترکیب نمی‌شود. |
+
+مثلاً `Monday` در والد و کلید صحیح `1` در فرزند، یک روز هستند. فرزند پنجره‌های دوشنبه را کامل جایگزین می‌کند، حتی اگر نام پذیرفته‌شده متفاوتی استفاده کرده باشد. نام‌های معادل تکراری در یک لایه رد می‌شوند؛ همین قاعده هنگام استفاده از سیاست cutoff برای نگاشت روزهای آن هم برقرار است. ساعت هفتگی خالی، تاریخ عادی را می‌بندد، اما تاریخ بازشده با روز کاری جایگزین همچنان می‌تواند از `extra_working_day_hours` استفاده کند. فقط ساعت خالی تاریخ مشخص یا روز صریح فصل، این fallback را هم می‌بندد؛ همان اولویت فاز ۰۴ حفظ می‌شود. ساعت‌ها پس از ترکیب همچنان باید اعتبارسنجی قبلی را بگذرانند. اعتبارسنجی cutoff فقط هنگام استفاده باقی می‌ماند؛ تنظیم بدشکل مهلت، وابستگی جدید فراخوانی معمول روز/ساعت کاری نمی‌شود.
+
+ارث‌بری شامل `default_profile` سراسری، تنظیم storage یا تصمیم‌گیری درباره timezone نیست. نام اصلی فرزند انتخابی در نتیجه، توضیح تاریخ و جست‌وجوی دیتابیس حفظ می‌شود. زنجیره نمونه `route_base → route_regional → route_tehran` تعطیلی پایه، تعطیلی منطقه‌ای و ساعت دیگر روزهای هفته را به ارث می‌برد و پنجشنبه و ساعت cutoff را جایگزین می‌کند.
+
+### تطبیق دقیق، اولویت و fallback
+
+بخش `profile_routing` باید دقیقاً `fallback_profile` و فهرست مرتب `rules` را داشته باشد؛ این فهرست می‌تواند خالی باشد. fallback و هدف همه قواعد باید پروفایل تنظیم‌شده باشند. هر قاعده دقیقاً `id`، `match` و `profile` دارد؛ شناسه‌ها رشته‌های غیرخالی و یکتا هستند و `match` یک نگاشت انجمنی غیرخالی است.
+
+کلیدهای match/context را برنامه تعیین می‌کند؛ باید شناسه ASCII با الگوی `[A-Za-z_][A-Za-z0-9_]*` باشند و به فیلدهای مثال محدود نیستند. مقدار باید عدد صحیح یا رشته‌ای غیر از `''` باشد. بولی، اعشاری، آرایه، شیء و `null` رد می‌شوند. زمینه خالی `[]` معتبر است و fallback را انتخاب می‌کند. همه فیلدهای ورودی اعتبارسنجی می‌شوند، حتی آن‌هایی که قاعده‌ای استفاده نمی‌کند.
+
+قاعده فقط وقتی مطابق است که همه فیلدهای تعریف‌شده در زمینه وجود داشته باشند و دقیقاً برابر باشند. فیلد اضافی زمینه مجاز است، اما تطبیق بخشی کافی نیست. `42 !== '42'` و `'tehran' !== 'Tehran'`؛ trim، تغییر بزرگی حروف، تبدیل نوع یا آوانویسی انجام نمی‌شود و فاصله‌های رشته حفظ می‌شوند. شرط wildcard، regex، callable یا عبارت اجرایی وجود ندارد.
+
+اگر چند قاعده مطابق باشند، قاعده با تعداد فیلد بیشتر برنده است. در تعداد برابر، ترتیب تنظیمات ملاک است و اولین قاعده برنده می‌شود. نبود تطبیق، `fallback_profile` صریح را انتخاب می‌کند، نه `default_profile`. در نمونه، هر سه قاعده انبار با زمینه کامل تهران مطابق‌اند؛ پس `tehran_warehouse` سه‌فیلدی با وجود قرارگرفتن در انتها برنده می‌شود. تغییر `warehouse_id` به رشته `'42'`، آن قاعده را نامطابق می‌کند و قاعده دوفیلدی `tehran_region` انتخاب می‌شود.
+
+تنظیمات مسیریابی غایب یا نامعتبر فقط هنگام فراخوانی صریح API مسیریابی، `WorkdayConfigurationException` می‌دهد. زمینه ورودی نامعتبر، `InvalidArgumentException` می‌دهد. خطای زنجیره ارث‌بری از نوع `WorkdayConfigurationException` است؛ برای پروفایل انتخابی بدون ارث‌بری، نوع خطاهای اعتبارسنجی قبلی حفظ می‌شود. تنظیم مسیریابی نامرتبط و نامعتبر، API معمولی را که مسیریابی نمی‌کند خراب نمی‌کند؛ برای همه هدف‌های احتمالی هم calculator ساخته نمی‌شود.
+
+### نتیجه انتخاب و هویت در storage
+
+کلاس `Zarbinco\LaravelWorkdays\Data\ResolvedProfile` تغییرناپذیر است. ویژگی‌های `profile`، `source` با مقدار `rule` یا `fallback`، و `ruleId` با شناسه انتخابی یا `null` برای fallback را دارد. متد `toArray()` فقط کلیدهای ثابت `profile`، `source` و `rule_id` را می‌دهد و زمینه خام را شامل نمی‌شود. اطلاعات زمینه‌ای مورد نیاز برای ثبت رویداد را جداگانه و طبق سیاست حریم خصوصی برنامه نگه دار.
+
+| storage driver | رفتار تقویم برای فرزند انتخابی |
+|---|---|
+| `config` | provider فعلی، تعطیلی تکرارشونده، تعطیلی دقیق و روز کاری جایگزین ارث‌رسیده را با نام واقعی فرزند می‌بیند. |
+| `database` | رکوردها با نام فرزند انتخابی خوانده می‌شوند. تعطیلی‌هایی که فقط در دیتابیس والد هستند، **ارث نمی‌رسند**. تنظیمات پروفایل مثل آخر هفته و ساعت کاری همچنان از config ارث می‌رسند. |
+| `chain` | تعطیلی config ارث‌رسیده با نام فرزند، با قواعد دیتابیس همان فرزند و طبق اولویت و گزارش منبع قبلی ترکیب می‌شود. رکوردهای دیتابیس والد اضافه نمی‌شوند. |
+
+نام پروفایل ساختگی، مدل یا migration جدید و تغییر رفتار importer اضافه نمی‌شود. اولویت قبلی تعطیلی/provider و رفتار کش provider دیتابیس حفظ می‌شود. مسیریابی فقط یک نام انتخاب می‌کند و برای همین انتخاب، provider تعطیلی یا query دیتابیس نمی‌سازد.
+
+### cutoff، برنامه تحویل و بازه‌های انتخابی
+
+پس از بررسی موجودی، پرداخت، مجوز و جداسازی tenant در برنامه، تقویم انبار و حمل‌کننده را صریح انتخاب کن. نام‌های نتیجه را در ساختار موجود برنامه قرار بده؛ planner مراحلش را خودکار از روی زمینه مسیریابی نمی‌کند. پروفایل‌ها و قواعد این نمونه باید از قبل مانند نمونه بالا تنظیم شده باشند.
+
+```php
+$carrier = Workday::resolveProfile(['kind' => 'carrier', 'carrier' => 'express']);
+$seller = Workday::resolveProfile(['kind' => 'seller', 'seller_id' => 7]);
+
+$cutoffDecision = $selectedCalculator->resolveCutoff('2026-11-02 12:59:59.999999');
+// Same-day eligible; inherited timezone Asia/Tehran, overridden cutoff 13:00.
+
+$routedPlan = [
+    'timezone' => 'Asia/Tehran',
+    'profile_timezones' => [$warehouse->profile => 'Asia/Tehran', $carrier->profile => 'Asia/Tehran'],
+    'cutoff_profile' => $warehouse->profile,
+    'stages' => [
+        ['id' => 'preparation', 'type' => 'work', 'profile' => $warehouse->profile, 'minutes' => 120],
+        ['id' => 'handoff', 'type' => 'handoff', 'profiles' => [$warehouse->profile, $carrier->profile]],
+    ],
+];
+$routedReadiness = Workday::planDelivery('2026-11-02 10:00', $routedPlan);
+// Preparation and handoff complete at 12:00 Tehran / 08:30 UTC.
+
+$routedSlotOptions = [
+    'profile' => $warehouse->profile,
+    'timezone' => 'Asia/Tehran',
+    'days' => 2,
+    'duration_minutes' => 120,
+    'step_minutes' => 60,
+    'min_notice_minutes' => 0,
+    'max_slots' => 20,
+];
+$routedSlots = Workday::deliverySlots($routedReadiness->estimatedCompletionAt, $routedSlotOptions);
+// First choice: 12:00–14:00 Tehran; no preparation or cutoff is reapplied.
+
+$routedSpecialSlots = Workday::deliverySlots('2026-11-10 09:00', array_replace(
+    $routedSlotOptions,
+    ['days' => 1],
+)); // Child's special date: 10:00–12:00 and 11:00–13:00 Tehran.
+
+$inheritedNight = Workday::profile('route_night');
+$inheritedNight->addBusinessMinutes($local('2026-11-02 23:00'), 180);
+// November 3, 02:00 Tehran, using inherited overnight support and Monday hours.
+```
+
+برنامه عمداً در آمادگی/انتقال تمام می‌شود و تحویل نهایی به مشتری را نشان نمی‌دهد. اطلاعات cutoff و حالت شبانه ارث‌رسیده، بدون تغییر قرارداد فازهای ۰۱ تا ۰۴ رعایت می‌شود. اولویت تاریخ/فصل، ساعت خالی، ادامه شیفت، `24:00`، ترتیب شروع بازه‌ها، DST و افق محدود حفظ می‌شوند. فراخوانی جداگانه `$cutoffDecision` فقط برای نمایش است؛ وقتی `cutoff_profile` در برنامه باشد، همان برنامه تصمیم cutoff خودش را یک بار می‌گیرد.
+
+مسیریابی، پروفایل انتخاب می‌کند نه منطقه زمانی. timezone از شناسه انبار، نام منطقه، محل سرور یا مقدار زمینه حدس زده نمی‌شود. cutoff از منطقه زمانی سیاست مؤثر خودش استفاده می‌کند. فراخوانی مستقیم ساعت کاری، منطقه زمانی شیء ورودی را نگه می‌دارد؛ برنامه تحویل و بازه‌ها همچنان تنظیمات صریح منطقه زمانی قبلی خود را می‌خواهند.
+
+### جداسازی، خطاها و یازده بررسی دستی
+
+برای ساخت calculator فقط زنجیره ارث‌بری انتخابی ترکیب می‌شود و تنظیم مؤثر در همان عملیات دوباره استفاده می‌شود. ارث‌بری برای هر تاریخ یا دقیقه تکرار نمی‌شود. کش سراسری فرایند یا پایدار، کش انتخاب بین زمینه‌های نامرتبط یا تغییر config سراسری وجود ندارد. عملیات/calculator تازه، تغییر تنظیمات را می‌بیند و به snapshot سراسری قدیمی وابسته نیست. مسیرهای معمول قبلی که مسیریابی نمی‌کنند، کار اضافی مسیریابی ندارند.
+
+از نمونه جداگانه Tinker استفاده کن. همه تاریخ‌های زیر مربوط به سال ۲۰۲۶ هستند و نمونه‌های مستقیم datetime، ساعت تهران را صریح می‌دهند.
+
+| بررسی | فراخوانی / مشاهده | نتیجه مورد انتظار |
+|---|---|---|
+| ۱. انبار معمولی | `Workday::resolveProfile(['kind' => 'warehouse', 'warehouse_id' => 99, 'region' => 'qom'])` | پروفایل `route_base`، منبع `rule`، شناسه `general_warehouse`. |
+| ۲. قاعده دقیق تهران | `$warehouse->toArray()` را ببین | پروفایل `route_tehran`، منبع `rule`، شناسه `tehran_warehouse`؛ قاعده دقیق‌تر برنده است. |
+| ۳. fallback | `Workday::resolveProfile([])->toArray()` | پروفایل `route_base`، منبع `fallback`، مقدار `rule_id => null`. |
+| ۴. تعطیلی والد | `$selectedCalculator->isHoliday($local('2026-01-01'))` | `true`؛ تعطیلی config ارث‌رسیده با هویت فرزند دیده می‌شود. |
+| ۵. پنجشنبه فرزند | `$selectedCalculator->workingWindowsFor($local('2026-11-05'))` | 09:00–12:00. |
+| ۶. پنجشنبه فرزند دیگر | `Workday::profile('route_isfahan')->workingWindowsFor($local('2026-11-05'))` | ساعت والد 09:00–17:00؛ وضعیت پروفایل‌ها به هم نشت نمی‌کند. |
+| ۷. cutoff ارث‌رسیده | `$cutoffDecision` را ببین؛ دوباره در `2026-11-02 13:00` حساب کن | timezone ارث‌رسیده و مهلت 13:00 فرزند؛ پیش از مرز مجاز و روی خود مرز نامجاز. |
+| ۸. شیفت شبانه ارث‌رسیده | جمع دقیقه `route_night` بالا | سوم نوامبر، 02:00؛ سه‌شنبه بخش ورودی `00:00–06:00` دارد. |
+| ۹. برنامه با انتخاب زمینه | `$routedReadiness->stages` و `estimatedCompletionAt` را ببین | نام انبار و حمل‌کننده صریح است؛ پایان در 12:00 تهران / 08:30 UTC. |
+| ۱۰. بازه با انتخاب زمینه | `$routedSlots` و `$routedSpecialSlots` را ببین | اولین بازه آمادگی 12:00–14:00؛ گزینه‌های تاریخ اختصاصی 10:00–12:00 و 11:00–13:00. |
+| ۱۱. اثر جانبی | وضعیت برنامه را پس از این محاسبه‌های config بررسی کن | بدون نوشتن دیتابیس، رزرو، نوبت، اعلان یا درخواست خارجی. |
+
+تنظیمات نشست را با `config(['workdays' => $routingOriginalConfig]);` برگردان. از تقویم آزمایشی استفاده کن و ردیف تعطیلی محیط عملیاتی را تغییر نده. برنامه باید زمینه قابل اعتماد را فراهم کند، قواعد را تعریف کند، مجوز و جداسازی tenant را اعمال کند و انتخاب واقعی حمل‌کننده، ظرفیت، رزرو تراکنشی و ثبت نوبت را مدیریت کند. انتخاب تقویم حمل‌کننده به معنی انتخاب یا رزرو سرویس حمل فیزیکی نیست.
+
 ## آخر هفته‌ها
 
 آخر هفته‌ها را می‌توانی با نام انگلیسی، نام کوتاه انگلیسی، عدد ISO یا نام فارسی وارد کنی:
@@ -1276,6 +1486,8 @@ WorkdayRule::businessDay('iran')->message('Please choose a working day.');
 چند متد اصلی facade و profile calculator:
 
 ```php
+Workday::resolveProfile($context);
+Workday::profileFor($context);
 Workday::profile('global')->isBusinessDay($date);
 Workday::profile('global')->isHoliday($date);
 Workday::profile('global')->isNonWorkingDay($date);
