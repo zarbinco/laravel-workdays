@@ -4,6 +4,9 @@ All notable changes to `zarbinco/laravel-workdays` will be documented in this fi
 
 ## 1.0.0 - Unreleased
 
+- Added opt-in recurring business schedules through `recurringSchedule()`, with direct original-anchor weekly and Gregorian/Jalali monthly cycles, strict date-only inputs, month-end handling, and no drift after holiday or short-month adjustments.
+- Added bounded next/previous/skip business-date adjustment, explicit skipped cycles, collision rejection/allowance with chronological safeguards, and immutable date-only result objects with stable serialization using existing calendars, storage, and inherited profiles.
+- Added focused recurrence/calendar/storage/timezone regression coverage and aligned English/Persian subscription examples, limits, application responsibilities, and seventeen-check local verification guides without automatic order creation, payments, or execution.
 - Added opt-in reverse delivery scheduling through `reversePlanDelivery()`, finding the latest calendar-feasible order receipt for an inclusive completion deadline with an explicit bounded lookback and the existing forward-plan schema.
 - Added immutable UTC `ReverseDeliveryPlanResult` objects with nullable infeasibility results, exact microsecond slack, separate receipt/planning/first-stage timestamps, and a verified nested forward result while preserving cutoff, calendar, timezone, and stage semantics.
 - Added focused reverse-scheduling regression coverage and aligned English/Persian API, e-commerce integration, search limitations, and thirteen-check local verification guides without order placement, reservations, or persistence.

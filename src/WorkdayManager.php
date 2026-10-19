@@ -17,6 +17,7 @@ use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseComparison;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
+use Zarbinco\LaravelWorkdays\Data\RecurringScheduleResult;
 use Zarbinco\LaravelWorkdays\Data\ResolvedProfile;
 use Zarbinco\LaravelWorkdays\Data\ReverseDeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\SlaResult;
@@ -28,6 +29,7 @@ use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
+use Zarbinco\LaravelWorkdays\Recurring\RecurringScheduleGenerator;
 use Zarbinco\LaravelWorkdays\Sla\SlaEvaluator;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
@@ -223,6 +225,12 @@ final class WorkdayManager
     public function deliverySlots(string|DateTimeInterface $readyAt, array $options): DeliverySlotsResult
     {
         return (new DeliverySlotGenerator($this->profile(...)))->generate($readyAt, $options);
+    }
+
+    /** @param array<string, mixed> $options */
+    public function recurringSchedule(string|DateTimeInterface $anchorDate, array $options): RecurringScheduleResult
+    {
+        return (new RecurringScheduleGenerator($this->profile(...)))->generate($anchorDate, $options);
     }
 
     public function explain(string|DateTimeInterface $date): DayInfo

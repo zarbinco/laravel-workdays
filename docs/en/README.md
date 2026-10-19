@@ -2155,6 +2155,290 @@ Use the dedicated UTC fixture above, keeping production records untouched. Resto
 
 For the split-window profile, also verify that an 11:30–13:30 pause counts only 60 paused working minutes. Restore the session with `config(['workdays' => $slaOriginalConfig]);`. The package supplies calculations; your application decides whether any workflow transition, reminder, or escalation should follow.
 
+## Recurring Business Schedules And Subscription Cycles
+
+`Workday::recurringSchedule($anchorDate, $options)` generates weekly or monthly business-date schedules. Every nominal occurrence is calculated directly from the original anchor and its zero-based cycle index. Moving a holiday occurrence never moves the anchor for later cycles: a monthly fifth can move from November 5 to November 6, then independently from December 5 to December 7, and return to January 5.
+
+This opt-in facade/`WorkdayManager` API returns immutable `RecurringScheduleResult` and `RecurringOccurrence` objects. It generates local calendar dates, not execution times. No subscription, order, payment, stock reservation, queue job, notification, booking, or automatic schedule execution is created. A scheduled business date is not a guaranteed delivery date. The application owns execution and must revalidate calendars, stock, payment, and capacity before acting.
+
+### Complete Local Fixture And Jalali Subscription Example
+
+Run this dedicated config-only example in a local `php artisan tinker` session. It needs no annual Iran dataset or working-hours configuration. The test profiles are separate from production subscription records; keep the original settings for restoration after all checks.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$recurringOriginalConfig = config('workdays');
+$recurringBase = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [],
+    'extra_working_days' => [],
+];
+$recurringProfiles = [
+    'recurring_warehouse' => array_replace($recurringBase, [
+        'custom_holidays' => [
+            '2026-11-05' => 'Monthly test holiday',
+            '2026-11-13' => 'Weekly test holiday',
+            '2027-01-01' => 'Year-boundary test holiday',
+        ],
+        'extra_working_days' => ['2026-11-07' => 'Test working Saturday'],
+    ]),
+    'recurring_child' => ['extends' => 'recurring_warehouse'],
+    'recurring_all_days' => array_replace($recurringBase, ['weekends' => []]),
+    'recurring_database_demo' => $recurringBase,
+    'recurring_collision' => [
+        'extends' => 'recurring_warehouse',
+        'custom_holidays' => array_fill_keys([
+            '2026-11-06', '2026-11-09', '2026-11-10',
+            '2026-11-11', '2026-11-12', '2026-11-13',
+        ], 'Collision test closure'),
+        'extra_working_days' => [],
+    ],
+    'subscription_warehouse' => [
+        'extends' => 'recurring_warehouse',
+        'weekends' => ['Friday'],
+    ],
+];
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 400,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $recurringProfiles),
+]);
+
+$recurringMonthlyOptions = [
+    'profile' => 'recurring_warehouse',
+    'timezone' => 'UTC',
+    'frequency' => 'monthly',
+    'calendar' => 'gregorian',
+    'interval' => 1,
+    'count' => 4,
+    'month_anchor' => 'day_of_month',
+    'short_month' => 'clamp',
+    'adjustment' => 'next',
+    'max_shift_days' => 7,
+    'collision_policy' => 'reject',
+];
+$recurringMonthly = Workday::recurringSchedule('2026-10-05', $recurringMonthlyOptions);
+$recurringMonthly->toArray();
+
+$subscriptionOptions = array_replace($recurringMonthlyOptions, [
+    'profile' => 'subscription_warehouse',
+    'timezone' => 'Asia/Tehran',
+    'calendar' => 'jalali',
+    'count' => 12,
+]);
+$subscriptionSchedule = Workday::recurringSchedule('2026-10-05', $subscriptionOptions);
+// Gregorian anchor 2026-10-05 is Jalali 1405-07-13.
+// Nominal periods advance through Jalali months, preserving day 13.
+foreach ($subscriptionSchedule->occurrences as $occurrence) {
+    if ($occurrence->scheduledDate === null) {
+        continue;
+    }
+
+    // The application decides whether and when to create an order for this date.
+    // This example deliberately performs no model writes or payment operations.
+}
+
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)
+    ->recurringSchedule('2026-10-05', $recurringMonthlyOptions);
+```
+
+The Gregorian monthly fixture produces:
+
+| Cycle | Nominal date | Scheduled date |
+|---|---|---|
+| 0 | `2026-10-05` | `2026-10-05` |
+| 1 | `2026-11-05` | `2026-11-06` |
+| 2 | `2026-12-05` | `2026-12-07` |
+| 3 | `2027-01-05` | `2027-01-05` |
+
+### Options And Strict Anchor Dates
+
+| Option | Required/default | Accepted values |
+|---|---|---|
+| `profile` | Required | Existing configured profile name. |
+| `timezone` | Required | Explicit IANA timezone such as `UTC` or `Asia/Tehran`. |
+| `frequency` | Required | `weekly` or `monthly`. |
+| `interval` | Required | Strict PHP integer `1`–`12`; number of weeks or selected-calendar months per cycle. |
+| `count` | Required | Strict PHP integer `1`–`60`; includes skipped cycles. |
+| `adjustment` | Required | `next`, `previous`, or `skip`. |
+| `calendar` | `gregorian` | `gregorian` or, for monthly schedules, `jalali`. |
+| `month_anchor` | `day_of_month` | Monthly only: `day_of_month` or `end_of_month`. |
+| `short_month` | `clamp` | Monthly only: `clamp` or `skip`. |
+| `max_shift_days` | `7` | Strict PHP integer `0`–`31`. |
+| `collision_policy` | `reject` | `reject` or `allow`. |
+
+Unknown keys, invalid values, numeric strings, floats, booleans, and explicit nulls are rejected. Weekly recurrence may explicitly use `calendar => 'gregorian'`; it rejects `jalali` and explicitly supplied `month_anchor`/`short_month`, even when their values match monthly defaults. No new mandatory profile or package configuration is introduced.
+
+A string anchor must be a strict, valid Gregorian `Y-m-d`, including when monthly recurrence uses Jalali months. Relative expressions, datetime strings, partial dates, invalid separators, and impossible dates are rejected. A `DateTimeInterface` anchor preserves its instant, converts to the explicit timezone, and supplies that local Gregorian date; its time is discarded and the caller's object is not mutated. Output dates are civil-date labels, not UTC-midnight timestamps.
+
+A civil date that does not exist in the chosen timezone cannot be an anchor. Later nominal labels skipped by timezone history are unavailable dates and follow the chosen business-day adjustment policy. Date stepping and signed shifts use calendar-date labels, not fixed 86,400-second intervals; DST therefore does not introduce a one-hour drift. A missing midnight is not the same as a fully skipped civil date: an existing date that starts later remains usable.
+
+### Weekly, Monthly, And Month-End Rules
+
+Weekly cycle `i` uses `original anchor + i × interval × 7` Gregorian date labels. If November 13 moves to November 16, the next weekly nominal date remains November 20. Weekly generation does not carry forward an adjusted date.
+
+Monthly cycle `i` selects the original calendar month plus `i × interval` months, then uses the original anchor day. Gregorian January 31 with `clamp` yields January 31, February 28, March 31, and April 30 in 2026. Clamping is local to that occurrence; March never inherits February's day 28.
+
+With `short_month => 'skip'`, an absent original day produces one explicit skipped cycle with null nominal/scheduled dates and reason `invalid_month_day`. Its target `nominalPeriod` and cycle index remain, and no replacement month is generated. `count` always means requested cycles, not a quota of successfully scheduled dates.
+
+`month_anchor => 'end_of_month'` requires the original anchor to be the last day of its selected calendar month. Every cycle then uses its own month end; January 31, 2024 advances to February 29, March 31, and April 30. `short_month` is irrelevant in this mode because every month has a final day; an arbitrary mid-month anchor is rejected rather than reinterpreted.
+
+Jalali monthly recurrence converts the public Gregorian anchor to Jalali, advances Jalali months, and converts valid nominal dates back to Gregorian for calendar evaluation and output. Months 1–6 have 31 days, 7–11 have 30, and Esfand has 29 or 30 according to the actual Jalali leap year. Clamp/skip, original-day restoration, Esfand/Farvardin rollover, and month-end rules use that calendar, with strict conversion/round-trip validation through the existing Verta dependency. Gregorian leap-year rules do not determine Esfand. Hijri monthly recurrence is unsupported; existing Hijri holidays still affect business-day eligibility.
+
+Gregorian labels use years `0001`–`9999`. A generated date outside that range, or a Jalali conversion unsupported by the installed Verta implementation, raises a clear `RuntimeException`; invalid conversions are not normalized into a different recurrence date.
+
+### Holiday Adjustment, Bounds, And Collisions
+
+An eligible nominal date remains unchanged. For a closed nominal date, `next` searches strictly forward and `previous` strictly backward for the nearest business date. `skip` retains the nominal date but returns no scheduled date, with reason `closed_day`. It inserts no replacement and does not move following cycles.
+
+`max_shift_days` counts date-label distance from each nominal date, with the nominal date at offset zero. A limit of seven includes a destination exactly seven dates away; the eighth is never examined. Weekends, holidays, and fully skipped dates consume that same budget. Zero permits no movement. Exhausting `next`/`previous` throws a contextual error rather than silently skipping. Previous adjustment can cross a month/year boundary and precede the original anchor within this shift limit.
+
+The original local Gregorian anchor is day zero of the existing `workdays.max_scan_days` forward horizon; its last date is inclusive. Every valid nominal date and every future adjusted destination must fit that one horizon. A skipped invalid-month-day cycle must have its entire target month's valid date range, including month end, within the horizon. Previous destinations may precede the anchor only within their own shift allowance. Count and shift bounds remain in force; the API neither increases configuration nor silently truncates cycles.
+
+Two non-skipped cycles can resolve to the same Gregorian scheduled date. Default `reject` throws and identifies both indexes and the date. Explicit `allow` preserves both cycles and marks **all** occurrences on that date `collides = true`; it does not merge them into one order. Skipped cycles cannot collide. Results always remain in cycle-index order. A chronological reversal between scheduled dates is rejected even under `allow`; same-date permission does not permit out-of-order subscription cycles.
+
+### Immutable Results And Serialization
+
+The classes live under `Zarbinco\LaravelWorkdays\Data`.
+
+| `RecurringScheduleResult` property | Meaning |
+|---|---|
+| `profile`, `timezone`, `calendar`, `frequency`, `interval` | Selected profile and effective recurrence settings. |
+| `anchorDate` | Normalized local Gregorian `Y-m-d` anchor. |
+| `requestedCount` | Requested cycle count, including skipped occurrences. |
+| `occurrences` | Exactly one immutable `RecurringOccurrence` per cycle, in index order. |
+
+| `RecurringOccurrence` property | Meaning |
+|---|---|
+| `cycleIndex` | Zero-based original cycle index. |
+| `nominalPeriod` | Monthly `YYYY-MM` in the selected recurrence calendar; weekly nominal Gregorian cycle date. |
+| `nominalDate` | Gregorian `Y-m-d`, or null only for an invalid day with short-month skip. |
+| `scheduledDate` | Gregorian `Y-m-d`, or null for a skipped occurrence. |
+| `status` | `scheduled`, `shifted`, or `skipped`. |
+| `reason` | `business_day`, `shifted_next`, `shifted_previous`, `closed_day`, or `invalid_month_day`. |
+| `shiftDays` | Calendar-date difference: zero unchanged, positive next, negative previous, null skipped. |
+| `collides` | Boolean indicating an explicitly allowed same-date collision. |
+
+Both `toArray()` methods use stable snake_case keys, JSON-compatible values, and actual integers, booleans, and nulls. Dates remain `Y-m-d` strings; `nominal_period` retains the selected-calendar month for monthly cycles. No unrelated order/customer identifiers or execution timestamps are added.
+
+### Existing Calendars, Operational Times, And Errors
+
+Eligibility uses the selected calculator's existing `isBusinessDay()` rules: weekends, Gregorian/Jalali/Hijri holidays, custom holidays, and extra working days with their existing precedence. Config/database/chain providers and inherited configuration remain supported. Parent database rows are not automatically inherited by a selected child. Profile routing is a separate application step, not an automatic part of recurrence generation.
+
+A business date can have empty working hours. Recurrence does not require hours, apply receipt cutoff, prepare an order, allocate an appointment, or reserve a slot. The application can separately choose an actual local operational timestamp and call Phase 02 `planDelivery()`, Phase 03 `deliverySlots()`, or Phase 08 `reversePlanDelivery()` as appropriate. A date string alone is not an absolute timestamp for those APIs. SLA/pause semantics are unchanged. Phase 06 delivery-promise auditing remains separate; no recurring-schedule snapshot schema or automatic persistence is added.
+
+| Exception | Typical cause |
+|---|---|
+| `Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException` | Invalid options/profile/timezone, unsupported recurrence settings, unknown keys, or a non-month-end anchor requested with month-end mode. |
+| `InvalidArgumentException` | Malformed/impossible string anchor or a nonexistent anchor civil date in the configured timezone. |
+| `RuntimeException` | Exhausted shift/global horizon or supported conversion bounds, rejected collision, or chronological reversal. Shift errors identify the profile, cycle, nominal date, direction, and limit. |
+
+Each operation resolves one selected-profile calculator/effective configuration and reuses its existing provider, with a small per-call eligibility cache. Cycles are generated directly from the original anchor, with at most 60 occurrences and 31 shift labels per occurrence; no minute/second scan, provider reconstruction per cycle, database write, or new persistent/global cache is introduced. Existing database-provider memoization and cache invalidation behavior remain unchanged. This phase does not add broader calendar prefetching or a bulk subscription executor. Calendar changes can change future recalculations, so the application should store definitions/results if needed and revalidate before execution. Existing APIs perform no new recurrence work unless this method is called.
+
+### Seventeen Local Manual Checks
+
+Continue the main fixture. The code captures expected errors as values so the remaining checks can run.
+
+```php
+$recurringWeeklyOptions = [
+    'profile' => 'recurring_warehouse', 'timezone' => 'UTC',
+    'frequency' => 'weekly', 'interval' => 1, 'count' => 4,
+    'adjustment' => 'next', 'max_shift_days' => 7, 'collision_policy' => 'reject',
+];
+$recurringWeekly = Workday::recurringSchedule('2026-11-06', $recurringWeeklyOptions);
+$recurringAllDays = array_replace($recurringMonthlyOptions, ['profile' => 'recurring_all_days']);
+$recurringClamp = Workday::recurringSchedule('2026-01-31', $recurringAllDays);
+$recurringShortSkip = Workday::recurringSchedule('2026-01-31', array_replace($recurringAllDays, [
+    'short_month' => 'skip',
+]));
+$recurringLeap = Workday::recurringSchedule('2024-01-31', $recurringAllDays);
+$recurringMonthEnd = Workday::recurringSchedule('2024-01-31', array_replace($recurringAllDays, [
+    'month_anchor' => 'end_of_month',
+]));
+$recurringJalaliOptions = array_replace($recurringAllDays, ['calendar' => 'jalali', 'count' => 8]);
+$recurringJalali = Workday::recurringSchedule('2026-09-22', $recurringJalaliOptions);
+$recurringJalaliSkip = Workday::recurringSchedule('2026-09-22', array_replace($recurringJalaliOptions, [
+    'short_month' => 'skip',
+])); // Gregorian anchor is Jalali 1405-06-31.
+$recurringEsfandLeap = Workday::recurringSchedule('2021-03-20', array_replace($recurringAllDays, [
+    'calendar' => 'jalali', 'month_anchor' => 'end_of_month', 'count' => 2,
+])); // 1399-12-30, then 1400-01-31
+$recurringEsfandNormal = Workday::recurringSchedule('2022-03-20', array_replace($recurringAllDays, [
+    'calendar' => 'jalali', 'month_anchor' => 'end_of_month', 'count' => 2,
+])); // 1400-12-29, then 1401-01-31
+$recurringPrevious = Workday::recurringSchedule('2027-01-01', array_replace($recurringMonthlyOptions, [
+    'count' => 1, 'adjustment' => 'previous',
+])); // scheduled 2026-12-31, shiftDays = -1
+$recurringClosedSkip = Workday::recurringSchedule('2026-11-06', array_replace($recurringWeeklyOptions, [
+    'adjustment' => 'skip',
+]));
+$recurringExtra = Workday::recurringSchedule('2026-11-07', array_replace($recurringWeeklyOptions, [
+    'count' => 1,
+])); // extra working Saturday remains unchanged
+$recurringInherited = Workday::recurringSchedule('2026-10-05', array_replace($recurringMonthlyOptions, [
+    'profile' => 'recurring_child',
+]));
+
+$recurringCollisionOptions = array_replace($recurringWeeklyOptions, [
+    'profile' => 'recurring_collision', 'count' => 2, 'max_shift_days' => 10,
+]);
+try {
+    Workday::recurringSchedule('2026-11-06', $recurringCollisionOptions);
+} catch (\RuntimeException $exception) {
+    $recurringCollisionError = $exception->getMessage();
+}
+$recurringAllowed = Workday::recurringSchedule('2026-11-06', array_replace($recurringCollisionOptions, [
+    'collision_policy' => 'allow',
+])); // both cycles scheduled 2026-11-16, both collides = true
+try {
+    Workday::recurringSchedule('2026-11-05', array_replace($recurringMonthlyOptions, [
+        'count' => 1, 'max_shift_days' => 0,
+    ]));
+} catch (\RuntimeException $exception) {
+    $recurringShiftError = $exception->getMessage();
+}
+```
+
+Check 16 needs the existing database migrations and a **pre-existing local test fixture**: an active `holiday` row for profile `recurring_database_demo`, date `2026-11-13`, with no other relevant active rules. Do not use production data or insert a row through this checklist. If that isolated fixture is absent, prepare it through your application's test setup before running the optional read-only check:
+
+```php
+$recurringPreviousDriver = config('workdays.storage.driver');
+config(['workdays.storage.driver' => 'database']);
+$recurringDatabaseClosed = Workday::profile('recurring_database_demo')->isBusinessDay('2026-11-13');
+$recurringDatabase = Workday::recurringSchedule('2026-11-06', array_replace($recurringWeeklyOptions, [
+    'profile' => 'recurring_database_demo', 'count' => 2,
+])); // ordinary eligibility is false; cycle 1 moves to 2026-11-16
+config(['workdays.storage.driver' => $recurringPreviousDriver]);
+```
+
+| Check | What to confirm |
+|---|---|
+| 1 | The dedicated warehouse has Saturday/Sunday weekends and explicit test holidays. |
+| 2 | `$recurringMonthly` contains four monthly cycles. |
+| 3 | Nominal dates retain day 5 of every original Gregorian month. |
+| 4 | November 5 moves to November 6. |
+| 5 | The January nominal/scheduled date returns to January 5; December's nominal remains December 5. |
+| 6 | Weekly November 13 moves to November 16; the next nominal remains November 20. |
+| 7 | January 31 clamps to February 28 and restores March 31; short-month skip keeps a null February cycle. |
+| 8 | The 2024 sequence uses February 29; month-end mode preserves each actual month end. |
+| 9 | Jalali 1405-06-31 clamps to 1405-07-30; skip keeps that cycle but gives null dates, and 1406-01 restores day 31. |
+| 10 | Leap Esfand 1399 ends on day 30; ordinary Esfand 1400 ends on day 29, then each advances to Farvardin 31. |
+| 11 | The January 1 holiday moves backward to December 31 with shift `-1`. |
+| 12 | Default collision rejection identifies cycles 0/1 and November 16. |
+| 13 | Explicit allowance keeps both November 16 occurrences with collision flags. |
+| 14 | The zero-shift holiday produces `$recurringShiftError`; it is not silently skipped. |
+| 15 | The child reproduces inherited holidays and extra-working-day behavior. |
+| 16 | With the isolated database fixture, ordinary eligibility and recurrence agree on the holiday; only reads occur. |
+| 17 | No order, payment, database write, queue job, stock/slot reservation, booking, or notification was created. |
+
+The explicit `skip` example preserves its closed nominal date; the extra-working-day example retains Saturday without movement. Inspect `toArray()` and cycle indexes as well as scheduled dates. Restore the local test configuration after all checks:
+
+```php
+config(['workdays' => $recurringOriginalConfig]);
+```
+
 ## Carbon Macros
 
 Carbon macros are enabled by default for `Carbon\Carbon`, `Carbon\CarbonImmutable`, and naturally for `Illuminate\Support\Carbon`.
@@ -2298,6 +2582,7 @@ Workday::captureDeliveryPromise($receivedAt, $plan, ['horizon_days' => 14]);
 Workday::compareDeliveryPromise($snapshotOrPayload);
 Workday::deliverySlots($readyAt, $options);
 Workday::evaluateSla($startedAt, $evaluatedAt, $slaOptions);
+Workday::recurringSchedule($anchorDate, $recurringOptions);
 ```
 
 `isHoliday()` means non-working day. It includes weekends, recurring calendar holidays, and exact custom holidays unless an extra working day override exists.

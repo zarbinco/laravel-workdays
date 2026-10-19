@@ -2077,6 +2077,290 @@ if ($result->breached) {
 
 برای پروفایل چندبخشی، بررسی کن توقف 11:30–13:30 فقط ۶۰ دقیقه کاری متوقف‌شده بدهد. تنظیمات نشست را با `config(['workdays' => $slaOriginalConfig]);` برگردان. پکیج محاسبه می‌کند و برنامه تصمیم می‌گیرد چه تغییر گردش کار، یادآور یا ارجاعی لازم است.
 
+## برنامه تکرارشونده کاری و دوره‌های اشتراک
+
+متد `Workday::recurringSchedule($anchorDate, $options)` برنامه تاریخ‌های کاری هفتگی یا ماهانه را تولید می‌کند. تاریخ اسمی هر نوبت مستقیماً از مبدأ اولیه و اندیس دوره با شروع از صفر محاسبه می‌شود. جابه‌جایی یک نوبت تعطیل، مبدأ دوره‌های بعدی را تغییر نمی‌دهد: روز پنجم ماه می‌تواند از ۵ نوامبر به ۶ نوامبر و مستقل از آن از ۵ دسامبر به ۷ دسامبر منتقل شود و در ژانویه دوباره به روز پنجم برگردد.
+
+این API اختیاری روی facade و `WorkdayManager`، شیءهای تغییرناپذیر `RecurringScheduleResult` و `RecurringOccurrence` می‌دهد. خروجی، تاریخ محلی تقویم است، نه زمان اجرای کار. اشتراک، سفارش، پرداخت، رزرو موجودی، job صف، اعلان، رزرو حمل یا اجرای خودکار برنامه ایجاد نمی‌شود. تاریخ کاری زمان‌بندی‌شده، تاریخ تحویل تضمین‌شده نیست. اجرای کار و بررسی دوباره تقویم، موجودی، پرداخت و ظرفیت پیش از اقدام، مسئولیت برنامه است.
+
+### نمونه کامل محلی و اشتراک ماهانه شمسی
+
+این نمونه اختصاصی با storage از نوع config را در یک نشست محلی `php artisan tinker` اجرا کن. به دیتاست سالانه ایران یا تنظیم ساعت کاری نیاز ندارد. پروفایل‌های آزمایشی از رکوردهای اشتراک واقعی جدا هستند؛ تنظیمات اولیه را نگه دار تا پس از همه بررسی‌ها برگردانی.
+
+```php
+use Zarbinco\LaravelWorkdays\Facades\Workday;
+
+$recurringOriginalConfig = config('workdays');
+$recurringBase = [
+    'weekends' => ['Saturday', 'Sunday'],
+    'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
+    'custom_holidays' => [],
+    'extra_working_days' => [],
+];
+$recurringProfiles = [
+    'recurring_warehouse' => array_replace($recurringBase, [
+        'custom_holidays' => [
+            '2026-11-05' => 'Monthly test holiday',
+            '2026-11-13' => 'Weekly test holiday',
+            '2027-01-01' => 'Year-boundary test holiday',
+        ],
+        'extra_working_days' => ['2026-11-07' => 'Test working Saturday'],
+    ]),
+    'recurring_child' => ['extends' => 'recurring_warehouse'],
+    'recurring_all_days' => array_replace($recurringBase, ['weekends' => []]),
+    'recurring_database_demo' => $recurringBase,
+    'recurring_collision' => [
+        'extends' => 'recurring_warehouse',
+        'custom_holidays' => array_fill_keys([
+            '2026-11-06', '2026-11-09', '2026-11-10',
+            '2026-11-11', '2026-11-12', '2026-11-13',
+        ], 'Collision test closure'),
+        'extra_working_days' => [],
+    ],
+    'subscription_warehouse' => [
+        'extends' => 'recurring_warehouse',
+        'weekends' => ['Friday'],
+    ],
+];
+config([
+    'workdays.storage.driver' => 'config',
+    'workdays.max_scan_days' => 400,
+    'workdays.profiles' => array_replace(config('workdays.profiles', []), $recurringProfiles),
+]);
+
+$recurringMonthlyOptions = [
+    'profile' => 'recurring_warehouse',
+    'timezone' => 'UTC',
+    'frequency' => 'monthly',
+    'calendar' => 'gregorian',
+    'interval' => 1,
+    'count' => 4,
+    'month_anchor' => 'day_of_month',
+    'short_month' => 'clamp',
+    'adjustment' => 'next',
+    'max_shift_days' => 7,
+    'collision_policy' => 'reject',
+];
+$recurringMonthly = Workday::recurringSchedule('2026-10-05', $recurringMonthlyOptions);
+$recurringMonthly->toArray();
+
+$subscriptionOptions = array_replace($recurringMonthlyOptions, [
+    'profile' => 'subscription_warehouse',
+    'timezone' => 'Asia/Tehran',
+    'calendar' => 'jalali',
+    'count' => 12,
+]);
+$subscriptionSchedule = Workday::recurringSchedule('2026-10-05', $subscriptionOptions);
+// Gregorian anchor 2026-10-05 is Jalali 1405-07-13.
+// Nominal periods advance through Jalali months, preserving day 13.
+foreach ($subscriptionSchedule->occurrences as $occurrence) {
+    if ($occurrence->scheduledDate === null) {
+        continue;
+    }
+
+    // The application decides whether and when to create an order for this date.
+    // This example deliberately performs no model writes or payment operations.
+}
+
+app(\Zarbinco\LaravelWorkdays\WorkdayManager::class)
+    ->recurringSchedule('2026-10-05', $recurringMonthlyOptions);
+```
+
+نمونه ماهانه میلادی این نتیجه را می‌دهد:
+
+| دوره | تاریخ اسمی | تاریخ زمان‌بندی‌شده |
+|---|---|---|
+| 0 | `2026-10-05` | `2026-10-05` |
+| 1 | `2026-11-05` | `2026-11-06` |
+| 2 | `2026-12-05` | `2026-12-07` |
+| 3 | `2027-01-05` | `2027-01-05` |
+
+### گزینه‌ها و تاریخ مبدأ سخت‌گیرانه
+
+| گزینه | الزامی / پیش‌فرض | مقدارهای پذیرفته‌شده |
+|---|---|---|
+| `profile` | الزامی | نام پروفایل تعریف‌شده. |
+| `timezone` | الزامی | منطقه زمانی صریح IANA مانند `UTC` یا `Asia/Tehran`. |
+| `frequency` | الزامی | `weekly` یا `monthly`. |
+| `interval` | الزامی | عدد صحیح واقعی PHP از `1` تا `12`؛ تعداد هفته یا ماهِ تقویم انتخابی در هر دوره. |
+| `count` | الزامی | عدد صحیح واقعی PHP از `1` تا `60`؛ شامل دوره‌های ردشده. |
+| `adjustment` | الزامی | `next`، `previous` یا `skip`. |
+| `calendar` | `gregorian` | `gregorian` یا برای برنامه ماهانه، `jalali`. |
+| `month_anchor` | `day_of_month` | فقط ماهانه: `day_of_month` یا `end_of_month`. |
+| `short_month` | `clamp` | فقط ماهانه: `clamp` یا `skip`. |
+| `max_shift_days` | `7` | عدد صحیح واقعی PHP از `0` تا `31`. |
+| `collision_policy` | `reject` | `reject` یا `allow`. |
+
+کلید ناشناخته، مقدار نامعتبر، رشته عددی، اعشاری، بولی و null صریح رد می‌شوند. برنامه هفتگی می‌تواند صریحاً `calendar => 'gregorian'` داشته باشد؛ `jalali` و گزینه‌های صریح `month_anchor` و `short_month` را رد می‌کند، حتی اگر مقدارشان با پیش‌فرض ماهانه برابر باشد. تنظیم اجباری جدیدی به پروفایل یا پکیج اضافه نمی‌شود.
+
+مبدأ رشته‌ای باید تاریخ معتبر میلادی با قالب دقیق `Y-m-d` باشد؛ حتی وقتی تکرار ماهانه از ماه‌های شمسی استفاده می‌کند. عبارت نسبی، رشته datetime، تاریخ ناقص، جداکننده نادرست و تاریخ ناممکن رد می‌شوند. مبدأ `DateTimeInterface` لحظه خود را حفظ می‌کند، به منطقه زمانی صریح تبدیل می‌شود و تاریخ محلی میلادی آن استخراج می‌شود؛ ساعت آن کنار گذاشته می‌شود و شیء ورودی تغییر نمی‌کند. تاریخ‌های خروجی، برچسب تاریخ مدنی هستند، نه timestamp نیمه‌شب UTC.
+
+تاریخ مدنی‌ای که در منطقه زمانی انتخاب‌شده وجود ندارد نمی‌تواند مبدأ باشد. تاریخ اسمی بعدی که در تاریخچه منطقه زمانی حذف شده، روز در دسترس محسوب نمی‌شود و از سیاست جابه‌جایی روز کاری پیروی می‌کند. پیمایش تاریخ و فاصله مثبت یا منفی، از برچسب تاریخ استفاده می‌کنند، نه بازه ثابت ۸۶٬۴۰۰ثانیه‌ای؛ تغییر ساعت باعث رانش یک‌ساعته نمی‌شود. حذف نیمه‌شب با حذف کل یک تاریخ فرق دارد: تاریخی که دیرتر شروع شده ولی وجود دارد، همچنان قابل استفاده است.
+
+### قواعد هفتگی، ماهانه و پایان ماه
+
+دوره هفتگی `i` از `original anchor + i × interval × 7` برچسب تاریخ میلادی به دست می‌آید. اگر ۱۳ نوامبر به ۱۶ نوامبر منتقل شود، تاریخ اسمی هفته بعد همچنان ۲۰ نوامبر است. تولید هفتگی از تاریخ جابه‌جاشده قبلی ادامه پیدا نمی‌کند.
+
+دوره ماهانه `i`، ماه تقویمی اولیه به‌علاوه `i × interval` ماه را انتخاب می‌کند و سپس همان روز مبدأ اصلی را به کار می‌برد. برای ۳۱ ژانویه با `clamp`، تاریخ‌های سال ۲۰۲۶ برابر ۳۱ ژانویه، ۲۸ فوریه، ۳۱ مارس و ۳۰ آوریل هستند. کوتاه‌کردن روز فقط برای همان نوبت است؛ مارس روز ۲۸ فوریه را به ارث نمی‌برد.
+
+با `short_month => 'skip'`، نبود روز اصلی یک دوره ردشده صریح با تاریخ اسمی و زمان‌بندی‌شده null و دلیل `invalid_month_day` می‌سازد. مقدار `nominalPeriod` ماه مقصد و اندیس دوره حفظ می‌شوند و ماه جایگزین تولید نمی‌شود. `count` همیشه تعداد دوره‌های درخواستی است، نه تعداد تاریخ‌های با موفقیت زمان‌بندی‌شده.
+
+گزینه `month_anchor => 'end_of_month'` می‌خواهد مبدأ، آخرین روز ماه در تقویم انتخابی باشد. هر دوره سپس آخرین روز ماه خودش را دارد؛ ۳۱ ژانویه ۲۰۲۴ به ۲۹ فوریه، ۳۱ مارس و ۳۰ آوریل می‌رسد. `short_month` در این حالت اثری ندارد، چون هر ماه روز آخر دارد؛ تاریخ دلخواه وسط ماه رد می‌شود و بی‌صدا به مبدأ پایان ماه تبدیل نمی‌شود.
+
+تکرار ماهانه شمسی، مبدأ عمومی میلادی را به شمسی تبدیل می‌کند، ماه‌های شمسی را جلو می‌برد و تاریخ اسمی معتبر را برای بررسی روز کاری و خروجی به میلادی برمی‌گرداند. ماه‌های ۱ تا ۶، ۳۱ روز؛ ماه‌های ۷ تا ۱۱، ۳۰ روز؛ و اسفند طبق سال کبیسه واقعی شمسی، ۲۹ یا ۳۰ روز دارند. clamp/skip، برگشت به روز اصلی، عبور اسفند به فروردین و پایان ماه از همان تقویم پیروی می‌کنند و تبدیل و بررسی رفت‌وبرگشت سخت‌گیرانه با وابستگی فعلی Verta انجام می‌شود. قواعد کبیسه میلادی، طول اسفند را تعیین نمی‌کنند. تکرار ماهانه قمری پشتیبانی نمی‌شود؛ تعطیلی‌های قمری فعلی همچنان بر کاری‌بودن تاریخ اثر دارند.
+
+برچسب میلادی از سال‌های `0001` تا `9999` استفاده می‌کند. تاریخ تولیدشده خارج از این محدوده یا تبدیل شمسی پشتیبانی‌نشده در نسخه نصب‌شده Verta، `RuntimeException` روشن می‌دهد؛ تبدیل نامعتبر به تاریخ دیگری از برنامه تکرار تبدیل نمی‌شود.
+
+### جابه‌جایی تعطیلی، محدودیت‌ها و تداخل
+
+تاریخ اسمی واجد شرایط بدون تغییر می‌ماند. برای تاریخ اسمی بسته، `next` اکیداً رو به جلو و `previous` اکیداً رو به عقب به دنبال نزدیک‌ترین روز کاری می‌گردد. `skip` تاریخ اسمی را حفظ می‌کند ولی تاریخ زمان‌بندی‌شده نمی‌دهد و دلیل آن `closed_day` است. نوبت جایگزین نمی‌سازد و دوره‌های بعدی را جابه‌جا نمی‌کند.
+
+گزینه `max_shift_days` فاصله برچسب تاریخ از تاریخ اسمی هر نوبت را می‌شمارد؛ تاریخ اسمی فاصله صفر دارد. حد هفت، مقصد با فاصله دقیقاً هفت تاریخ را شامل می‌شود؛ تاریخ هشتم اصلاً بررسی نمی‌شود. آخر هفته، تعطیلی و تاریخ کاملاً حذف‌شده هم همین بودجه را مصرف می‌کنند. صفر یعنی جابه‌جایی مجاز نیست. تمام‌شدن محدوده `next` یا `previous` به‌جای ردکردن بی‌صدا، خطای دارای اطلاعات مرتبط می‌دهد. جابه‌جایی قبلی می‌تواند از مرز ماه یا سال عبور کند و در همین حد، پیش از مبدأ اولیه قرار بگیرد.
+
+تاریخ محلی میلادیِ مبدأ اصلی، روز صفر افق رو به جلوی فعلی `workdays.max_scan_days` است و آخرین تاریخ آن هم مجاز است. هر تاریخ اسمی معتبر و هر مقصد جابه‌جاشده آینده باید در همین یک افق جا بگیرد. برای دوره ردشده به دلیل نبود روز ماه، کل بازه معتبر ماه مقصد، از جمله روز آخر، باید در افق باشد. مقصد قبلی فقط در محدوده جابه‌جایی خودش می‌تواند پیش از مبدأ قرار بگیرد. محدودیت تعداد و جابه‌جایی حفظ می‌شود؛ API تنظیمات را افزایش نمی‌دهد و دوره‌ها را بی‌صدا کوتاه نمی‌کند.
+
+دو دوره ردنشده می‌توانند به یک تاریخ میلادی زمان‌بندی‌شده برسند. پیش‌فرض `reject` خطا می‌دهد و هر دو اندیس و تاریخ را مشخص می‌کند. گزینه صریح `allow` هر دو دوره را نگه می‌دارد و روی **همه** نوبت‌های آن تاریخ `collides = true` می‌گذارد؛ آن‌ها را به یک سفارش تبدیل نمی‌کند. دوره ردشده نمی‌تواند تداخل داشته باشد. ترتیب نتیجه همیشه بر اساس اندیس دوره می‌ماند. وارونگی زمانی بین تاریخ‌های زمان‌بندی‌شده حتی با `allow` رد می‌شود؛ اجازه تاریخ برابر، اجازه به‌هم‌خوردن ترتیب دوره‌های اشتراک نیست.
+
+### نتیجه‌های تغییرناپذیر و تبدیل به آرایه
+
+کلاس‌ها در فضای نام `Zarbinco\LaravelWorkdays\Data` قرار دارند.
+
+| ویژگی `RecurringScheduleResult` | معنی |
+|---|---|
+| `profile`، `timezone`، `calendar`، `frequency`، `interval` | پروفایل انتخابی و تنظیم مؤثر تکرار. |
+| `anchorDate` | مبدأ محلی میلادی نرمال‌شده با قالب `Y-m-d`. |
+| `requestedCount` | تعداد دوره درخواستی، شامل نوبت‌های ردشده. |
+| `occurrences` | دقیقاً یک `RecurringOccurrence` تغییرناپذیر برای هر دوره، به ترتیب اندیس. |
+
+| ویژگی `RecurringOccurrence` | معنی |
+|---|---|
+| `cycleIndex` | اندیس دوره اصلی با شروع از صفر. |
+| `nominalPeriod` | برای ماهانه، `YYYY-MM` در تقویم انتخابی؛ برای هفتگی، تاریخ میلادی اسمی دوره. |
+| `nominalDate` | تاریخ میلادی `Y-m-d`؛ فقط برای روز ناموجود ماه با سیاست skip، برابر null است. |
+| `scheduledDate` | تاریخ میلادی `Y-m-d` یا null برای نوبت ردشده. |
+| `status` | `scheduled`، `shifted` یا `skipped`. |
+| `reason` | `business_day`، `shifted_next`، `shifted_previous`، `closed_day` یا `invalid_month_day`. |
+| `shiftDays` | اختلاف تاریخ تقویمی: صفر برای بدون تغییر، مثبت برای بعدی، منفی برای قبلی و null برای ردشده. |
+| `collides` | بولیِ نشان‌دهنده تداخل مجاز و صریح در یک تاریخ. |
+
+هر دو متد `toArray()` کلیدهای ثابت snake_case، مقدارهای سازگار با JSON و عدد صحیح، بولی و null واقعی می‌دهند. تاریخ‌ها رشته `Y-m-d` می‌مانند؛ `nominal_period` در دوره ماهانه، ماه تقویم انتخابی را حفظ می‌کند. شناسه نامرتبط سفارش یا مشتری و timestamp اجرا اضافه نمی‌شود.
+
+### تقویم فعلی، زمان عملیاتی و خطاها
+
+واجد شرایط بودن از قواعد فعلی `isBusinessDay()` در calculator انتخابی می‌آید: آخر هفته، تعطیلی میلادی/شمسی/قمری، تعطیلی اختصاصی و روز کاری اضافه با همان اولویت قبلی. providerهای config/database/chain و تنظیم ارث‌رسیده پشتیبانی می‌شوند. ردیف دیتابیس والد خودکار به فرزند انتخابی ارث نمی‌رسد. مسیریابی پروفایل مرحله جداگانه برنامه است و در تولید تکرار خودکار اجرا نمی‌شود.
+
+تاریخ کاری ممکن است ساعت کاری خالی داشته باشد. تکرار به ساعت نیاز ندارد، cutoff دریافت را اعمال نمی‌کند، سفارش آماده نمی‌کند، وقت ملاقات نمی‌دهد و بازه رزرو نمی‌کند. برنامه می‌تواند جداگانه زمان محلی واقعی کار را انتخاب کند و در صورت نیاز `planDelivery()` فاز ۰۲، `deliverySlots()` فاز ۰۳ یا `reversePlanDelivery()` فاز ۰۸ را فراخوانی کند. رشته فقط تاریخ، برای آن APIها timestamp مطلق نیست. قواعد SLA و توقف بدون تغییر هستند. بررسی تعهد تحویل فاز ۰۶ جدا می‌ماند؛ ساختار snapshot تکرار یا ذخیره‌سازی خودکار اضافه نمی‌شود.
+
+| خطا | علت معمول |
+|---|---|
+| `Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException` | گزینه، پروفایل یا منطقه زمانی نامعتبر، تنظیم تکرار پشتیبانی‌نشده، کلید ناشناخته یا مبدأیی که برای حالت پایان ماه، آخر ماه نیست. |
+| `InvalidArgumentException` | مبدأ رشته‌ای بدقالب/ناممکن یا تاریخ مدنی مبدأ که در منطقه زمانی انتخاب‌شده وجود ندارد. |
+| `RuntimeException` | تمام‌شدن محدوده جابه‌جایی، افق سراسری یا محدوده تبدیل پشتیبانی‌شده، تداخل ردشده یا وارونگی زمانی. خطای جابه‌جایی، پروفایل، دوره، تاریخ اسمی، جهت و حد را مشخص می‌کند. |
+
+هر عملیات یک calculator/تنظیم مؤثر برای پروفایل انتخابی می‌گیرد و provider فعلی آن را همراه با کش کوچکِ واجد شرایط بودن تاریخ در همان فراخوانی دوباره استفاده می‌کند. هر دوره مستقیماً از مبدأ اصلی تولید می‌شود، با حداکثر ۶۰ نوبت و ۳۱ برچسب جابه‌جایی برای هر نوبت؛ پیمایش دقیقه/ثانیه، ساخت دوباره provider برای هر دوره، نوشتن در دیتابیس و کش پایدار/سراسری تازه اضافه نمی‌شود. رفتار فعلی نگهداری نتیجه در حافظه و باطل‌شدن کش provider دیتابیس تغییر نمی‌کند. این فاز پیش‌خوانی گسترده تقویم یا اجرای گروهی اشتراک اضافه نمی‌کند. تغییر تقویم می‌تواند محاسبه بعدی را عوض کند؛ برنامه در صورت نیاز تعریف و نتیجه را ذخیره کند و پیش از اجرا دوباره اعتبارسنجی کند. APIهای قبلی بدون فراخوانی این متد، کار تازه‌ای برای تکرار انجام نمی‌دهند.
+
+### هفده بررسی دستی محلی
+
+نمونه اصلی را ادامه بده. کد، متن خطاهای مورد انتظار را نگه می‌دارد تا بررسی‌های بعدی هم اجرا شوند.
+
+```php
+$recurringWeeklyOptions = [
+    'profile' => 'recurring_warehouse', 'timezone' => 'UTC',
+    'frequency' => 'weekly', 'interval' => 1, 'count' => 4,
+    'adjustment' => 'next', 'max_shift_days' => 7, 'collision_policy' => 'reject',
+];
+$recurringWeekly = Workday::recurringSchedule('2026-11-06', $recurringWeeklyOptions);
+$recurringAllDays = array_replace($recurringMonthlyOptions, ['profile' => 'recurring_all_days']);
+$recurringClamp = Workday::recurringSchedule('2026-01-31', $recurringAllDays);
+$recurringShortSkip = Workday::recurringSchedule('2026-01-31', array_replace($recurringAllDays, [
+    'short_month' => 'skip',
+]));
+$recurringLeap = Workday::recurringSchedule('2024-01-31', $recurringAllDays);
+$recurringMonthEnd = Workday::recurringSchedule('2024-01-31', array_replace($recurringAllDays, [
+    'month_anchor' => 'end_of_month',
+]));
+$recurringJalaliOptions = array_replace($recurringAllDays, ['calendar' => 'jalali', 'count' => 8]);
+$recurringJalali = Workday::recurringSchedule('2026-09-22', $recurringJalaliOptions);
+$recurringJalaliSkip = Workday::recurringSchedule('2026-09-22', array_replace($recurringJalaliOptions, [
+    'short_month' => 'skip',
+])); // Gregorian anchor is Jalali 1405-06-31.
+$recurringEsfandLeap = Workday::recurringSchedule('2021-03-20', array_replace($recurringAllDays, [
+    'calendar' => 'jalali', 'month_anchor' => 'end_of_month', 'count' => 2,
+])); // 1399-12-30, then 1400-01-31
+$recurringEsfandNormal = Workday::recurringSchedule('2022-03-20', array_replace($recurringAllDays, [
+    'calendar' => 'jalali', 'month_anchor' => 'end_of_month', 'count' => 2,
+])); // 1400-12-29, then 1401-01-31
+$recurringPrevious = Workday::recurringSchedule('2027-01-01', array_replace($recurringMonthlyOptions, [
+    'count' => 1, 'adjustment' => 'previous',
+])); // scheduled 2026-12-31, shiftDays = -1
+$recurringClosedSkip = Workday::recurringSchedule('2026-11-06', array_replace($recurringWeeklyOptions, [
+    'adjustment' => 'skip',
+]));
+$recurringExtra = Workday::recurringSchedule('2026-11-07', array_replace($recurringWeeklyOptions, [
+    'count' => 1,
+])); // extra working Saturday remains unchanged
+$recurringInherited = Workday::recurringSchedule('2026-10-05', array_replace($recurringMonthlyOptions, [
+    'profile' => 'recurring_child',
+]));
+
+$recurringCollisionOptions = array_replace($recurringWeeklyOptions, [
+    'profile' => 'recurring_collision', 'count' => 2, 'max_shift_days' => 10,
+]);
+try {
+    Workday::recurringSchedule('2026-11-06', $recurringCollisionOptions);
+} catch (\RuntimeException $exception) {
+    $recurringCollisionError = $exception->getMessage();
+}
+$recurringAllowed = Workday::recurringSchedule('2026-11-06', array_replace($recurringCollisionOptions, [
+    'collision_policy' => 'allow',
+])); // both cycles scheduled 2026-11-16, both collides = true
+try {
+    Workday::recurringSchedule('2026-11-05', array_replace($recurringMonthlyOptions, [
+        'count' => 1, 'max_shift_days' => 0,
+    ]));
+} catch (\RuntimeException $exception) {
+    $recurringShiftError = $exception->getMessage();
+}
+```
+
+بررسی ۱۶ به migrationهای فعلی و **داده آزمایشی محلی از قبل موجود** نیاز دارد: یک ردیف فعال از نوع `holiday` برای پروفایل `recurring_database_demo` در تاریخ `2026-11-13`، بدون قاعده فعال مرتبط دیگر. از داده تولید استفاده نکن و با این چک‌لیست ردیف درج نکن. اگر نمونه جداگانه موجود نیست، پیش از بررسی اختیاری فقط‌خواندنی، آن را در راه‌اندازی تست برنامه آماده کن:
+
+```php
+$recurringPreviousDriver = config('workdays.storage.driver');
+config(['workdays.storage.driver' => 'database']);
+$recurringDatabaseClosed = Workday::profile('recurring_database_demo')->isBusinessDay('2026-11-13');
+$recurringDatabase = Workday::recurringSchedule('2026-11-06', array_replace($recurringWeeklyOptions, [
+    'profile' => 'recurring_database_demo', 'count' => 2,
+])); // ordinary eligibility is false; cycle 1 moves to 2026-11-16
+config(['workdays.storage.driver' => $recurringPreviousDriver]);
+```
+
+| بررسی | نتیجه مورد انتظار |
+|---|---|
+| ۱ | انبار اختصاصی، آخر هفته شنبه/یکشنبه و تعطیلی آزمایشی صریح دارد. |
+| ۲ | مقدار `$recurringMonthly` چهار دوره ماهانه دارد. |
+| ۳ | تاریخ‌های اسمی، روز پنجم هر ماه میلادیِ مبدأ اصلی را حفظ می‌کنند. |
+| ۴ | ۵ نوامبر به ۶ نوامبر منتقل می‌شود. |
+| ۵ | تاریخ اسمی/زمان‌بندی‌شده ژانویه به روز پنجم برمی‌گردد؛ تاریخ اسمی دسامبر همچنان ۵ دسامبر است. |
+| ۶ | نوبت هفتگی ۱۳ نوامبر به ۱۶ نوامبر منتقل می‌شود؛ تاریخ اسمی بعدی همچنان ۲۰ نوامبر است. |
+| ۷ | ۳۱ ژانویه به ۲۸ فوریه محدود می‌شود و در مارس به روز ۳۱ برمی‌گردد؛ skip ماه کوتاه، دوره فوریه را با تاریخ‌های null نگه می‌دارد. |
+| ۸ | دنباله ۲۰۲۴ از ۲۹ فوریه استفاده می‌کند؛ حالت پایان ماه، آخر واقعی هر ماه را حفظ می‌کند. |
+| ۹ | تاریخ شمسی ۱۴۰۵/۰۶/۳۱ به ۱۴۰۵/۰۷/۳۰ محدود می‌شود؛ skip آن دوره را با تاریخ‌های null نگه می‌دارد و ۱۴۰۶/۰۱ دوباره روز ۳۱ دارد. |
+| ۱۰ | اسفند کبیسه ۱۳۹۹ روز ۳۰ تمام می‌شود؛ اسفند عادی ۱۴۰۰ روز ۲۹، و هر دو سپس به ۳۱ فروردین می‌رسند. |
+| ۱۱ | تعطیلی اول ژانویه به ۳۱ دسامبر با جابه‌جایی `-1` منتقل می‌شود. |
+| ۱۲ | رد پیش‌فرض تداخل، دوره‌های ۰ و ۱ و تاریخ ۱۶ نوامبر را مشخص می‌کند. |
+| ۱۳ | اجازه صریح، هر دو نوبت ۱۶ نوامبر را با پرچم تداخل نگه می‌دارد. |
+| ۱۴ | تعطیلی با حد جابه‌جایی صفر، `$recurringShiftError` می‌دهد و بی‌صدا رد نمی‌شود. |
+| ۱۵ | فرزند، رفتار تعطیلی و روز کاری اضافه ارث‌رسیده را بازتولید می‌کند. |
+| ۱۶ | با داده دیتابیس جداگانه، وضعیت روز کاری و تکرار درباره تعطیلی یکسان‌اند؛ فقط خواندن انجام می‌شود. |
+| ۱۷ | سفارش، پرداخت، نوشتن در دیتابیس، job صف، رزرو موجودی/بازه، رزرو حمل یا اعلان ایجاد نشده است. |
+
+نمونه صریح `skip` تاریخ اسمی بسته را حفظ می‌کند؛ نمونه روز کاری اضافه، شنبه را بدون جابه‌جایی نگه می‌دارد. علاوه بر تاریخ زمان‌بندی‌شده، `toArray()` و اندیس دوره‌ها را هم بررسی کن. پس از همه بررسی‌ها تنظیم محلی را برگردان:
+
+```php
+config(['workdays' => $recurringOriginalConfig]);
+```
+
 ## Carbon macros
 
 Carbon macros به صورت پیش‌فرض برای `Carbon\Carbon`، `Carbon\CarbonImmutable` و `Illuminate\Support\Carbon` ثبت می‌شوند.
@@ -2206,6 +2490,7 @@ Workday::captureDeliveryPromise($receivedAt, $plan, ['horizon_days' => 14]);
 Workday::compareDeliveryPromise($snapshotOrPayload);
 Workday::deliverySlots($readyAt, $options);
 Workday::evaluateSla($startedAt, $evaluatedAt, $slaOptions);
+Workday::recurringSchedule($anchorDate, $recurringOptions);
 ```
 
 متد `isHoliday()` یعنی روز غیرکاری. این نتیجه می‌تواند به خاطر آخر هفته، تعطیلی تقویمی یا تعطیلی دقیق باشد، مگر اینکه همان تاریخ به عنوان روز کاری جایگزین تعریف شده باشد.
