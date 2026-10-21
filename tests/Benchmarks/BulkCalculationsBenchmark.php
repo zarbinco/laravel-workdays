@@ -5,21 +5,16 @@ declare(strict_types=1);
 /**
  * Opt in: php tests/Benchmarks/BulkCalculationsBenchmark.php --run
  *
- * Each sample runs in a fresh PHP process against its own in-memory SQLite database.
+ * Each sample runs in a fresh PHP process with its own detached Config definitions.
  * No application database, orders, network service, or persistent dataset is accessed.
  */
 
 use Composer\InstalledVersions;
 use Illuminate\Config\Repository;
-use Illuminate\Container\Container;
-use Illuminate\Database\Capsule\Manager as Capsule;
-use Illuminate\Database\Events\QueryExecuted;
-use Illuminate\Events\Dispatcher;
-use Illuminate\Support\Facades\Facade;
 use Zarbinco\LaravelWorkdays\Bulk\BulkCalculator;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory;
+use Zarbinco\LaravelWorkdays\Configuration\ConfigDefinitionSource;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
-use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
 
 require dirname(__DIR__, 2).'/vendor/autoload.php';
@@ -58,27 +53,24 @@ final class BulkCalculationsBenchmark
         }
 
         $report = [
-            'benchmark' => 'Phase 10 bulk calculations',
-            'database' => 'SQLite :memory:; a separate identical fixture in every child process',
+            'benchmark' => 'Refactor 01 Config-source bulk calculations',
+            'driver' => 'config',
             'runtime' => self::versions(),
             'methodology' => [
                 'samples_per_mode_and_size' => self::SAMPLES,
                 'process' => 'Fresh PHP child for every measured sample.',
-                'warmup' => 'Ten unmeasured calculations warm class loading and SQLite pages. Every measured provider/calculator context starts fresh.',
-                'timing' => 'Includes operation construction, calculation, chunking and full-result parity hashing; excludes bootstrap, schema creation, seeding and warm-up.',
+                'warmup' => 'Ten unmeasured calculations warm class loading. Every measured operation or bulk chunk opens a fresh source view and context.',
+                'timing' => 'Includes operation construction, source views, calculation, chunking and full-result parity hashing; excludes fixture construction and warm-up.',
                 'memory' => 'Peak allocated PHP bytes after a post-warm-up peak reset; both absolute peak and delta from the measurement baseline are recorded.',
-                'query_counts' => 'Measured holiday SELECTs only; schema, fixture inserts and warm-up queries are excluded. Query logging is disabled.',
                 'construction_counts' => 'Bulk creations are observed by the internal service callback. Standalone counts are explicitly derived from successful two-profile plan allocation paths, not instrumented.',
                 'parity' => 'SHA-256 of every complete serialized DeliveryPlanResult in original operation order; no result history is retained.',
-                'cache_lifetime' => 'Ordinary calls and each bulk chunk create fresh provider contexts; no cache survives between chunks or samples.',
-                'limitations' => 'SQLite measurements do not predict MySQL production performance. No MySQL benchmark is performed.',
+                'cache_lifetime' => 'Each ordinary call and bulk chunk opens one detached definition view and context; calculator/provider caches stay inside that context.',
+                'limitations' => 'This measures Config only. No database backend, SQL query performance, or cross-driver parity is measured.',
             ],
             'fixture' => [
                 'profiles' => self::PROFILES,
-                'inherited_profile' => 'bench_warehouse_child extends bench_warehouse_a; database rows retain the child name',
-                'storage' => 'database',
-                'prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30'],
-                'actual_fetched_range' => 'The exact 30 requested Gregorian labels; no automatic margin.',
+                'inherited_profile' => 'bench_warehouse_child extends bench_warehouse_a, including its logical holidays and working hours',
+                'source' => 'Canonical workdays.driver=config and workdays.definitions, with no database service binding',
                 'operations' => 'Repeated UTC dates, split working shifts, exact holidays/extra working days, and three-stage work/handoff/work delivery plans.',
                 'chunk_size' => self::CHUNK_SIZE,
             ],
@@ -107,9 +99,6 @@ final class BulkCalculationsBenchmark
             foreach ($samples as $mode => $measurements) {
                 $workload[$mode] = [
                     'median_elapsed_seconds' => self::median(array_column($measurements, 'elapsed_seconds')),
-                    'median_holiday_select_queries' => self::median(array_column($measurements, 'holiday_select_queries')),
-                    'median_recurring_rule_queries' => self::median(array_column($measurements, 'recurring_rule_queries')),
-                    'median_special_date_queries' => self::median(array_column($measurements, 'special_date_queries')),
                     'median_peak_memory_bytes' => self::median(array_column($measurements, 'peak_memory_bytes')),
                     'median_peak_memory_delta_bytes' => self::median(array_column($measurements, 'peak_memory_delta_bytes')),
                     'construction_counts' => $measurements[0]['construction_counts'],
@@ -152,21 +141,8 @@ final class BulkCalculationsBenchmark
 
     private static function sample(string $mode, int $size): array
     {
-        $capsule = self::fixture();
-        $manager = new WorkdayManager;
-        $queries = ['rules' => 0, 'special' => 0];
-        $observeQueries = false;
-        $capsule->getConnection()->listen(static function (QueryExecuted $query) use (&$queries, &$observeQueries): void {
-            if (! $observeQueries || preg_match('/\A\s*select\b/i', $query->sql) !== 1) {
-                return;
-            }
-
-            if (str_contains($query->sql, 'workday_holiday_rules')) {
-                $queries['rules']++;
-            } elseif (str_contains($query->sql, 'workday_special_dates')) {
-                $queries['special']++;
-            }
-        });
+        $contexts = self::fixture();
+        $manager = new WorkdayManager($contexts);
 
         $creations = [];
         $observer = static function (string $kind, ?string $profile = null, ?int $scanLimit = null) use (&$creations): void {
@@ -178,42 +154,36 @@ final class BulkCalculationsBenchmark
             }
         };
 
-        self::execute($mode, 10, $manager, $observer);
+        self::execute($mode, 10, $manager, $contexts, $observer);
         $creations = [];
         gc_collect_cycles();
         memory_reset_peak_usage();
         $baselineMemory = memory_get_usage(true);
-        $observeQueries = true;
         $started = hrtime(true);
-        $result = self::execute($mode, $size, $manager, $observer);
+        $result = self::execute($mode, $size, $manager, $contexts, $observer);
         $elapsed = (hrtime(true) - $started) / 1000000000;
         $peak = memory_get_peak_usage(true);
-        $observeQueries = false;
         ksort($creations);
 
         return [
             'mode' => $mode,
             'elapsed_seconds' => $elapsed,
-            'holiday_select_queries' => $queries['rules'] + $queries['special'],
-            'recurring_rule_queries' => $queries['rules'],
-            'special_date_queries' => $queries['special'],
             'peak_memory_bytes' => $peak,
             'peak_memory_delta_bytes' => max(0, $peak - $baselineMemory),
             'measurement_baseline_memory_bytes' => $baselineMemory,
             'construction_counts' => $mode === 'bulk' ? $creations : [
                 'calculator' => $size * 2,
-                'database_provider' => $size * 2,
-                'config_provider' => $size * 2,
-                'holiday_provider_total' => $size * 4,
+                'config_provider' => $size,
+                'holiday_provider_total' => $size,
             ],
             'construction_counts_source' => $mode === 'bulk'
                 ? 'Observed successful operation-local cache creation events from BulkCalculator.'
-                : 'Derived: every successful UTC plan references two profiles; the unchanged standalone manager constructs one calculator and both config/database provider objects per profile.',
+                : 'Derived: every successful UTC plan resolves two calculators and one shared Config holiday provider inside its single operation context.',
             ...$result,
         ];
     }
 
-    private static function execute(string $mode, int $size, WorkdayManager $manager, Closure $observer): array
+    private static function execute(string $mode, int $size, WorkdayManager $manager, CalculationContextFactory $contexts, Closure $observer): array
     {
         $hash = hash_init('sha256');
         $processed = 0;
@@ -234,9 +204,7 @@ final class BulkCalculationsBenchmark
             } else {
                 // The public manager delegates to this exact service. The observer only
                 // counts internal allocations and never changes a calculator or result.
-                $batch = (new BulkCalculator($observer))->calculate($operations, [
-                    'on_error' => 'collect', 'prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30'],
-                ]);
+                $batch = (new BulkCalculator($contexts, $observer))->calculate($operations, ['on_error' => 'collect']);
 
                 foreach ($batch->items as $item) {
                     $processed++;
@@ -294,60 +262,35 @@ final class BulkCalculationsBenchmark
         return $operations;
     }
 
-    private static function fixture(): Capsule
+    private static function fixture(): CalculationContextFactory
     {
         date_default_timezone_set('UTC');
-        $container = new Container;
-        Container::setInstance($container);
         $config = new Repository(['workdays' => require dirname(__DIR__, 2).'/config/workdays.php']);
-        $container->instance('config', $config);
-        $capsule = new Capsule($container);
-        $capsule->setEventDispatcher(new Dispatcher($container));
-        $capsule->addConnection(['driver' => 'sqlite', 'database' => ':memory:', 'prefix' => '', 'foreign_key_constraints' => true]);
-        $capsule->setAsGlobal();
-        $capsule->bootEloquent();
-        $container->instance('db', $capsule->getDatabaseManager());
-        $container->bind('db.schema', static fn () => $capsule->schema());
-        Facade::clearResolvedInstances();
-        Facade::setFacadeApplication($container);
-
-        foreach (glob(dirname(__DIR__, 2).'/database/migrations/*.php') as $migration) {
-            (require $migration)->up();
-        }
 
         $hours = array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], [['09:00', '12:00'], ['13:00', '17:00']]);
         $base = [
             'weekends' => ['Saturday', 'Sunday'], 'working_hours' => $hours,
             'extra_working_day_hours' => [['09:00', '12:00'], ['13:00', '17:00']],
-            'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []],
-            'custom_holidays' => [], 'extra_working_days' => [],
+            'holidays' => ['gregorian' => ['11-12' => 'Annual November closure'], 'jalali' => ['01-01' => 'Nowruz'], 'hijri' => ['01-01' => 'Hijri new year']],
+            'custom_holidays' => ['2026-11-04' => 'November closure 4', '2026-11-11' => 'November closure 11', '2026-11-18' => 'November closure 18'],
+            'extra_working_days' => [],
         ];
         $profiles = [];
 
-        foreach (self::PROFILES as $profile) {
+        foreach (self::PROFILES as $index => $profile) {
             $profiles[$profile] = $base;
+            if ($index % 2 === 0) {
+                $profiles[$profile]['extra_working_days'] = ['2026-11-07' => 'Benchmark Saturday override'];
+            }
         }
 
         $profiles['bench_warehouse_child'] = ['extends' => 'bench_warehouse_a'];
-        $config->set('workdays.profiles', $profiles);
-        $config->set('workdays.storage.driver', 'database');
+        $config->set('workdays.driver', 'config');
         $config->set('workdays.max_scan_days', 45);
-        $config->set('workdays.include_start_date', false);
+        $config->set('workdays.definitions', ['default_profile' => self::PROFILES[0], 'include_start_date' => false,
+            'hijri' => ['method' => 'mathematical', 'adjustment' => 0], 'profile_routing' => null, 'profiles' => $profiles]);
 
-        foreach (self::PROFILES as $index => $profile) {
-            foreach ([['gregorian', 11, 12, true], ['jalali', 1, 1, true], ['hijri', 1, 1, true], ['gregorian', 11, 13, false]] as [$calendar, $month, $day, $active]) {
-                WorkdayHolidayRule::create(['profile' => $profile, 'calendar_type' => $calendar, 'month' => $month, 'day' => $day, 'title' => 'Benchmark recurring '.$calendar, 'is_active' => $active]);
-            }
-
-            foreach ([4, 11, 18] as $day) {
-                WorkdaySpecialDate::create(['profile' => $profile, 'date' => sprintf('2026-11-%02d', $day), 'type' => 'holiday', 'title' => 'Benchmark closure '.$day, 'is_active' => true]);
-            }
-
-            WorkdaySpecialDate::create(['profile' => $profile, 'date' => '2026-11-07', 'type' => 'working_day', 'title' => 'Benchmark Saturday override', 'is_active' => $index % 2 === 0]);
-            WorkdaySpecialDate::create(['profile' => $profile, 'date' => '2026-11-09', 'type' => 'holiday', 'title' => 'Inactive benchmark closure', 'is_active' => false]);
-        }
-
-        return $capsule;
+        return new CalculationContextFactory($config, new ConfigDefinitionSource($config));
     }
 
     private static function median(array $values): int|float
@@ -359,7 +302,7 @@ final class BulkCalculationsBenchmark
 
     private static function versions(): array
     {
-        $versions = ['php' => PHP_VERSION, 'sqlite' => (new PDO('sqlite::memory:'))->query('select sqlite_version()')->fetchColumn()];
+        $versions = ['php' => PHP_VERSION];
 
         foreach (['laravel/framework', 'orchestra/testbench', 'nesbot/carbon', 'hekmatinasser/verta', 'phpunit/phpunit'] as $package) {
             $versions[$package] = InstalledVersions::getPrettyVersion($package);

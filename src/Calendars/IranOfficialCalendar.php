@@ -4,7 +4,9 @@ declare(strict_types=1);
 
 namespace Zarbinco\LaravelWorkdays\Calendars;
 
+use Hekmatinasser\Verta\Verta;
 use InvalidArgumentException;
+use Zarbinco\LaravelWorkdays\Configuration\WorkdayDefinitions;
 use Zarbinco\LaravelWorkdays\Support\DateNormalizer;
 
 final class IranOfficialCalendar
@@ -80,7 +82,11 @@ final class IranOfficialCalendar
      */
     public function validateDataset(array $dataset): array
     {
-        if (! isset($dataset['year']) || ! is_int($dataset['year'])) {
+        $dataset = WorkdayDefinitions::detach($dataset, 'Iran official calendar dataset');
+        if (strlen(json_encode($dataset, JSON_THROW_ON_ERROR)) > 4194304) {
+            throw new InvalidArgumentException('Iran official calendar dataset exceeds the 4 MiB limit.');
+        }
+        if (! isset($dataset['year']) || ! is_int($dataset['year']) || $dataset['year'] < 1 || $dataset['year'] > 3177) {
             throw new InvalidArgumentException('Iran official calendar dataset must include an integer year.');
         }
 
@@ -98,16 +104,24 @@ final class IranOfficialCalendar
 
         $this->validateSource($dataset['source']);
 
-        if (! isset($dataset['holidays']) || ! is_array($dataset['holidays'])) {
+        if (! isset($dataset['holidays']) || ! is_array($dataset['holidays']) || ! array_is_list($dataset['holidays'])) {
             throw new InvalidArgumentException('Iran official calendar dataset must include a holidays array.');
         }
 
+        $seen = [];
         foreach ($dataset['holidays'] as $index => $holiday) {
             if (! is_array($holiday)) {
                 throw new InvalidArgumentException(sprintf('Iran official calendar holiday at index [%d] must be an array.', $index));
             }
 
             $this->validateHoliday($holiday, $index);
+            if ((int) substr($holiday['date'], 0, 4) !== $dataset['year']) {
+                throw new InvalidArgumentException('Iran official calendar holiday date must belong to dataset year ['.$dataset['year'].'].');
+            }
+            if (isset($seen[$holiday['gregorian_date']])) {
+                throw new InvalidArgumentException('Iran official calendar dataset contains duplicate holiday date ['.$holiday['gregorian_date'].'].');
+            }
+            $seen[$holiday['gregorian_date']] = true;
         }
 
         return $dataset;
@@ -129,12 +143,15 @@ final class IranOfficialCalendar
     private function validateSource(array $source): void
     {
         foreach (['name', 'url', 'retrieved_at'] as $key) {
-            if (! isset($source[$key]) || ! is_string($source[$key]) || trim($source[$key]) === '') {
+            if (! isset($source[$key]) || ! is_string($source[$key]) || trim($source[$key]) === '' || strlen($source[$key]) > 4096) {
                 throw new InvalidArgumentException(sprintf('Iran official calendar source metadata requires a non-empty [%s].', $key));
             }
         }
 
         DateNormalizer::toImmutable($source['retrieved_at']);
+        if (filter_var($source['url'], FILTER_VALIDATE_URL) === false || ! in_array(parse_url($source['url'], PHP_URL_SCHEME), ['https', 'http'], true)) {
+            throw new InvalidArgumentException('Iran official calendar source URL must be an absolute HTTP or HTTPS URL.');
+        }
     }
 
     /**
@@ -156,7 +173,17 @@ final class IranOfficialCalendar
 
         DateNormalizer::toImmutable($holiday['gregorian_date']);
 
-        if (! isset($holiday['title']) || ! is_string($holiday['title']) || trim($holiday['title']) === '') {
+        [$year, $month, $day] = array_map('intval', explode('-', $holiday['date']));
+        try {
+            $gregorian = (new JalaliCalendarAdapter)->jalaliDateToGregorian($year, $month, $day);
+            if (Verta::instance($gregorian)->format('Y-m-d') !== $holiday['date'] || $gregorian->toDateString() !== $holiday['gregorian_date']) {
+                throw new InvalidArgumentException('Gregorian and Jalali dates must agree and both must be actual calendar dates.');
+            }
+        } catch (\Throwable $error) {
+            throw new InvalidArgumentException('Iran official calendar holiday at index ['.$index.'] has invalid Gregorian/Jalali date correspondence: '.$error->getMessage(), previous: $error);
+        }
+
+        if (! isset($holiday['title']) || ! is_string($holiday['title']) || trim($holiday['title']) === '' || strlen($holiday['title']) > 4096) {
             throw new InvalidArgumentException(sprintf('Iran official calendar holiday at index [%d] requires a non-empty title.', $index));
         }
 

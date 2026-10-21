@@ -14,26 +14,33 @@ use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\DeliveryStageResult;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
+use Zarbinco\LaravelWorkdays\Exceptions\WorkingTimeSearchException;
 use Zarbinco\LaravelWorkdays\Support\CutoffDateTimeNormalizer;
 use Zarbinco\LaravelWorkdays\Support\CutoffPolicy;
-use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
+use Zarbinco\LaravelWorkdays\Support\WorkingTime;
+use Zarbinco\LaravelWorkdays\Support\WorkingTimeBoundary;
 
 final readonly class DeliveryPlanner
 {
     private Closure $resolveCalculator;
 
-    private ?Closure $resolveProfileConfig;
+    private Closure $resolveProfileConfig;
+
+    private Closure $profileExists;
 
     /**
      * @param  callable(string, int): BusinessDayCalculator  $resolveCalculator
-     * @param  null|callable(string): array<string, mixed>  $resolveProfileConfig
+     * @param  callable(string): array<string, mixed>  $resolveProfileConfig
+     * @param  callable(string): bool  $profileExists
      */
-    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null, private ?int $horizonDays = null, private ?array $knownProfiles = null, private ?array $scanSettings = null)
+    public function __construct(callable $resolveCalculator, callable $resolveProfileConfig, private int $maxScanDays, callable $profileExists, private ?int $horizonDays = null)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
-        $this->resolveProfileConfig = $resolveProfileConfig === null ? null : Closure::fromCallable($resolveProfileConfig);
+        $this->resolveProfileConfig = Closure::fromCallable($resolveProfileConfig);
+        $this->profileExists = Closure::fromCallable($profileExists);
     }
 
     /**
@@ -46,7 +53,7 @@ final readonly class DeliveryPlanner
         $receivedAt = $this->normalizeInput($receivedAt, $timezone);
 
         try {
-            $limit = ProfileConfigValidator::validateMaxScanDays($this->scanSettings === null ? config('workdays.max_scan_days', 3660) : $this->scanSettings['max_scan_days']);
+            $limit = ProfileConfigValidator::validateMaxScanDays($this->maxScanDays);
         } catch (InvalidArgumentException $exception) {
             throw new WorkdayConfigurationException('Invalid delivery planning horizon: '.$exception->getMessage(), previous: $exception);
         }
@@ -59,12 +66,15 @@ final readonly class DeliveryPlanner
             $limit = $this->horizonDays;
         }
 
-        // UTC is used only to advance Gregorian date labels, including skipped civil dates.
-        $lastDate = CarbonImmutable::createFromFormat('!Y-m-d', $receivedAt->setTimezone($timezone)->toDateString(), 'UTC')->addDays($limit);
-        $lastDateLabel = $lastDate->toDateString();
-        $horizonEnd = $this->horizonEnd($lastDate, $timezone);
+        try {
+            // Validate bounded Gregorian labels before Carbon receives a potentially huge offset.
+            $lastDateLabel = WorkingTimeBoundary::labelAfter($receivedAt->setTimezone($timezone)->toDateString(), $limit);
+            $lastDate = CarbonImmutable::createFromFormat('!Y-m-d', $lastDateLabel, 'UTC');
+            $horizonEnd = $this->horizonEnd($lastDate, $timezone);
+        } catch (InvalidArgumentException $exception) {
+            throw new WorkdayConfigurationException('Invalid delivery planning horizon: '.$exception->getMessage(), previous: $exception);
+        }
         $calculators = [];
-        $overnightProfiles = [];
         $effectiveConfigs = [];
 
         foreach ($plan['stages'] as $stage) {
@@ -78,9 +88,10 @@ final readonly class DeliveryPlanner
                         $scanLimit = max($limit, (int) $firstLocalDate->diffInDays($lastLocalDate));
                         $calculators[$profile] = ($this->resolveCalculator)($profile, $scanLimit);
                         $effectiveConfigs[$profile] = $this->profileConfig($profile);
-                        $overnightProfiles[$profile] = ($effectiveConfigs[$profile]['allow_overnight_working_hours'] ?? false) === true;
                     } catch (InvalidArgumentException $exception) {
                         throw new WorkdayConfigurationException($this->stageContext($stage).': '.$exception->getMessage(), previous: $exception);
+                    } catch (DefinitionSourceException $exception) {
+                        throw $exception;
                     } catch (RuntimeException $exception) {
                         throw new RuntimeException($this->stageContext($stage).': '.$exception->getMessage(), previous: $exception);
                     }
@@ -116,6 +127,8 @@ final readonly class DeliveryPlanner
                 $this->assertWithinHorizon($cursor, $timezone, $lastDateLabel);
             } catch (InvalidArgumentException $exception) {
                 throw new WorkdayConfigurationException($this->stageContext($first).': '.$exception->getMessage(), previous: $exception);
+            } catch (DefinitionSourceException $exception) {
+                throw $exception;
             } catch (RuntimeException $exception) {
                 throw $this->stageFailure($first, $limit, $exception);
             }
@@ -131,7 +144,7 @@ final readonly class DeliveryPlanner
                 $this->assertWithinHorizon($cursor, $timezone, $lastDateLabel);
 
                 [$startedAt, $completedAt] = match ($stage['type']) {
-                    'work' => $this->work($cursor, $calculators[$profiles[0]], $plan['profile_timezones'][$profiles[0]], $stage['minutes'], $horizonEnd, $overnightProfiles[$profiles[0]]),
+                    'work' => $this->work($cursor, $calculators[$profiles[0]], $plan['profile_timezones'][$profiles[0]], $stage['minutes'], $horizonEnd),
                     'handoff' => $this->handoff($cursor, $profiles, $calculators, $plan['profile_timezones'], $timezone, $lastDateLabel),
                     'business_days' => [$cursor, $this->businessDays($cursor, $calculators[$profiles[0]], $plan['profile_timezones'][$profiles[0]], $stage['days'], $horizonEnd)],
                 };
@@ -144,6 +157,8 @@ final readonly class DeliveryPlanner
                 }
             } catch (InvalidArgumentException $exception) {
                 throw new WorkdayConfigurationException($this->stageContext($stage).': '.$exception->getMessage(), previous: $exception);
+            } catch (DefinitionSourceException $exception) {
+                throw $exception;
             } catch (RuntimeException $exception) {
                 throw $this->stageFailure($stage, $limit, $exception);
             }
@@ -157,17 +172,7 @@ final readonly class DeliveryPlanner
 
     private function profileConfig(string $profile): mixed
     {
-        if ($this->resolveProfileConfig !== null) {
-            return ($this->resolveProfileConfig)($profile);
-        }
-
-        // Preserve one-argument constructor usages, resolving only inherited metadata.
-        $profiles = config('workdays.profiles', []);
-        $profileConfig = is_array($profiles) ? ($profiles[$profile] ?? null) : null;
-
-        return is_array($profileConfig) && array_key_exists('extends', $profileConfig)
-            ? (new ProfileConfigResolver($profiles))->resolve($profile)
-            : $profileConfig;
+        return ($this->resolveProfileConfig)($profile);
     }
 
     /** @internal Shared strict input normalization for delivery promise capture. */
@@ -204,7 +209,7 @@ final readonly class DeliveryPlanner
 
     private function horizonEnd(CarbonImmutable $lastDate, string $timezone): CarbonImmutable
     {
-        $boundary = DateTimeImmutable::createFromFormat('!Y-m-d', $lastDate->addDay()->toDateString(), new DateTimeZone($timezone));
+        $boundary = DateTimeImmutable::createFromFormat('!Y-m-d', WorkingTimeBoundary::labelAfter($lastDate->toDateString(), 1), new DateTimeZone($timezone));
         $end = CarbonImmutable::instance($boundary)->setTimezone('UTC');
         $wallTime = $boundary->format('Y-m-d H:i:s.u');
         $wallTimestamp = $boundary->getTimestamp() + $boundary->getOffset();
@@ -226,7 +231,7 @@ final readonly class DeliveryPlanner
     /**
      * @return array{CarbonImmutable, CarbonImmutable}
      */
-    private function work(CarbonImmutable $cursor, BusinessDayCalculator $calculator, string $timezone, int $minutes, CarbonImmutable $horizonEnd, bool $overnight): array
+    private function work(CarbonImmutable $cursor, BusinessDayCalculator $calculator, string $timezone, int $minutes, CarbonImmutable $horizonEnd): array
     {
         $start = $calculator->nextBusinessTime($cursor->setTimezone($timezone));
 
@@ -235,49 +240,17 @@ final readonly class DeliveryPlanner
         }
 
         if ($minutes > 0) {
-            $this->assertWorkCapacity($start, $calculator, $minutes, $horizonEnd->setTimezone($timezone), $overnight);
-            $completion = $calculator->addBusinessMinutes($start, $minutes);
+            try {
+                // Consume exact capacity once, inside this operation's original global horizon.
+                $completion = $calculator->consumeBusinessMinutesUntil($start, $minutes, $horizonEnd->setTimezone($timezone));
+            } catch (WorkingTimeSearchException $exception) {
+                throw new RuntimeException('Insufficient business minutes within the global planning horizon.', previous: $exception);
+            }
         } else {
             $completion = $start;
         }
 
         return [$start->setTimezone('UTC'), $completion->setTimezone('UTC')];
-    }
-
-    private function assertWorkCapacity(CarbonImmutable $start, BusinessDayCalculator $calculator, int $minutes, CarbonImmutable $end, bool $overnight): void
-    {
-        // Bound the legacy duration loop before calling it, without reimplementing minute arithmetic.
-        // Stop as soon as enough capacity exists; short stages do not scan the entire horizon.
-        $remaining = $minutes;
-        $probe = $start;
-
-        while ($probe->lessThan($end)) {
-            $nextDate = $probe->startOfDay()->addDay()->startOfDay();
-
-            if ($nextDate->lessThanOrEqualTo($probe)) {
-                throw new RuntimeException('Working-capacity date search made no progress.');
-            }
-
-            $sliceEnd = $overnight ? $nextDate : $nextDate->subMicrosecond();
-            $sliceEnd = $sliceEnd->lessThan($end) ? $sliceEnd : $end;
-            $available = $calculator->diffBusinessMinutes($probe, $sliceEnd);
-
-            if ($available >= $remaining) {
-                return;
-            }
-
-            $remaining -= $available;
-            $probe = $nextDate;
-        }
-
-        // Daily integer totals can discard fractional minutes at both the initial cursor
-        // and a profile-local horizon boundary. Recheck only a failing overnight request
-        // against one aggregate interval; ordinary short stages still stop immediately.
-        if ($overnight && $calculator->diffBusinessMinutes($start, $end) >= $minutes) {
-            return;
-        }
-
-        throw new RuntimeException('Insufficient business minutes within the global planning horizon.');
     }
 
     /**
@@ -396,7 +369,7 @@ final readonly class DeliveryPlanner
     /**
      * @param  array<string, mixed>  $plan
      */
-    public function validatePlan(array $plan, ?array $knownProfiles = null): void
+    public function validatePlan(array $plan): void
     {
         $this->rejectUnknownKeys($plan, ['timezone', 'profile_timezones', 'cutoff_profile', 'stages'], 'Delivery plan');
         $this->validateTimezone($plan['timezone'] ?? null, 'Delivery plan timezone');
@@ -466,6 +439,14 @@ final readonly class DeliveryPlanner
                 if (! is_int($stage[$duration] ?? null) || $stage[$duration] < 0) {
                     throw new WorkdayConfigurationException(sprintf('%s requires %s as a non-negative integer; strings and floats are not accepted.', $context, $duration));
                 }
+
+                if ($type === 'work') {
+                    try {
+                        WorkingTime::minutes($stage['minutes']);
+                    } catch (InvalidArgumentException $exception) {
+                        throw new WorkdayConfigurationException($context.': '.$exception->getMessage(), previous: $exception);
+                    }
+                }
             }
 
             foreach ($profiles as $profile) {
@@ -481,14 +462,10 @@ final readonly class DeliveryPlanner
             }
         }
 
-        // A frozen plan may retain an unused timezone mapping whose live profile was removed.
-        $registry = $knownProfiles ?? $this->knownProfiles;
-        $profileConfigs = $registry === null ? config('workdays.profiles', []) : array_fill_keys($registry, true);
-
         foreach (array_keys($plan['profile_timezones']) as $profile) {
             // Referenced profiles are resolved once below, with their stage's error context.
             if (! isset($referencedProfiles[$profile])
-                && (! is_array($profileConfigs) || ! array_key_exists($profile, $profileConfigs))) {
+                && ! ($this->profileExists)((string) $profile)) {
                 throw new WorkdayConfigurationException(sprintf('Delivery profile_timezones contains unknown profile [%s].', $profile));
             }
         }

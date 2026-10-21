@@ -20,8 +20,7 @@ use Zarbinco\LaravelWorkdays\Data\RecurringOccurrence;
 use Zarbinco\LaravelWorkdays\Data\RecurringScheduleResult;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
+use Zarbinco\LaravelWorkdays\Holidays\LogicalHolidayProvider;
 use Zarbinco\LaravelWorkdays\Recurring\RecurringScheduleGenerator;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
@@ -33,16 +32,16 @@ final class RecurringSchedulesTest extends TestCase
         parent::setUp();
 
         config()->set('app.timezone', 'Pacific/Honolulu');
-        config()->set('workdays.default_profile', 'warehouse');
-        config()->set('workdays.storage.driver', 'config');
+        config()->set('workdays.definitions.default_profile', 'warehouse');
+        config()->set('workdays.driver', 'config');
         config()->set('workdays.max_scan_days', 3660);
-        config()->set('workdays.hijri', ['method' => 'mathematical', 'adjustment' => 0]);
-        config()->set('workdays.profiles', ['warehouse' => $this->profile()]);
+        config()->set('workdays.definitions.hijri', ['method' => 'mathematical', 'adjustment' => 0]);
+        config()->set('workdays.definitions.profiles', ['warehouse' => $this->profile()]);
     }
 
     public function test_a_monthly_holiday_adjustments_never_change_the_original_anchor_day(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-05' => 'Fixture closure']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-05' => 'Fixture closure']);
 
         $result = $this->schedule('2026-10-05');
 
@@ -60,7 +59,7 @@ final class RecurringSchedulesTest extends TestCase
 
     public function test_b_weekly_cycles_remain_anchored_after_a_friday_holiday_moves_to_monday(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-13' => 'Friday closure']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-13' => 'Friday closure']);
 
         $result = $this->schedule('2026-11-06', ['frequency' => 'weekly']);
 
@@ -203,7 +202,7 @@ final class RecurringSchedulesTest extends TestCase
 
     public function test_h_previous_adjustment_crosses_year_boundary_before_anchor_with_negative_date_distance(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2027-01-01' => 'New year closure']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2027-01-01' => 'New year closure']);
 
         $result = $this->schedule('2027-01-01', ['frequency' => 'weekly', 'adjustment' => 'previous', 'count' => 1, 'max_shift_days' => 1]);
 
@@ -215,7 +214,7 @@ final class RecurringSchedulesTest extends TestCase
 
     public function test_i_skip_policy_keeps_closed_nominal_date_and_cycle_without_replacement(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-13' => 'Closed']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-13' => 'Closed']);
 
         $result = $this->schedule('2026-11-06', ['frequency' => 'weekly', 'adjustment' => 'skip']);
 
@@ -229,9 +228,9 @@ final class RecurringSchedulesTest extends TestCase
 
     public function test_j_extra_working_day_reopens_a_closed_saturday_without_working_hours_or_cutoff(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-07' => 'Closed']);
-        config()->set('workdays.profiles.warehouse.extra_working_days', ['2026-11-07' => 'Reopened']);
-        config()->set('workdays.profiles.warehouse.cutoff', ['time' => 'invalid but unused']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-07' => 'Closed']);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days', ['2026-11-07' => 'Reopened']);
+        config()->set('workdays.definitions.profiles.warehouse.cutoff', ['time' => 'invalid but unused']);
 
         $result = $this->schedule('2026-11-07', ['frequency' => 'weekly', 'count' => 1, 'max_shift_days' => 0]);
 
@@ -292,12 +291,12 @@ final class RecurringSchedulesTest extends TestCase
         foreach (range(0, 6) as $distance) {
             $closed[$anchor->addDays($distance * $sign)->toDateString()] = 'Closed';
         }
-        config()->set('workdays.profiles.warehouse.custom_holidays', $closed);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', $closed);
         $result = $this->schedule('2026-11-02', ['count' => 1, 'adjustment' => $direction, 'max_shift_days' => 7]);
         $this->assertSame($anchor->addDays(7 * $sign)->toDateString(), $result->occurrences[0]->scheduledDate);
         $this->assertSame(7 * $sign, $result->occurrences[0]->shiftDays);
         $closed[$anchor->addDays(7 * $sign)->toDateString()] = 'Also closed';
-        config()->set('workdays.profiles.warehouse.custom_holidays', $closed);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', $closed);
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessageMatches('/(?=.*warehouse)(?=.*0)(?=.*2026-11-02)(?=.*'.$direction.')(?=.*7)/s');
 
@@ -311,8 +310,8 @@ final class RecurringSchedulesTest extends TestCase
 
     public function test_maximum_thirty_one_label_shift_is_supported_without_unbounded_search(): void
     {
-        config()->set('workdays.profiles.warehouse.weekends', range(1, 7));
-        config()->set('workdays.profiles.warehouse.extra_working_days', ['2026-12-02' => 'Only eligible date']);
+        config()->set('workdays.definitions.profiles.warehouse.weekends', range(1, 7));
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days', ['2026-12-02' => 'Only eligible date']);
 
         $result = $this->schedule('2026-11-01', ['count' => 1, 'max_shift_days' => 31]);
 
@@ -334,7 +333,7 @@ final class RecurringSchedulesTest extends TestCase
     public function test_future_adjustment_cannot_cross_the_global_horizon_even_with_a_larger_shift_limit(): void
     {
         config()->set('workdays.max_scan_days', 7);
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-09' => 'Final-date closure']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-09' => 'Final-date closure']);
         $this->expectException(RuntimeException::class);
 
         $this->schedule('2026-11-02', ['frequency' => 'weekly', 'count' => 2, 'max_shift_days' => 31]);
@@ -343,7 +342,7 @@ final class RecurringSchedulesTest extends TestCase
     public function test_previous_adjustment_may_precede_anchor_within_its_shift_allowance(): void
     {
         config()->set('workdays.max_scan_days', 1);
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2027-01-01' => 'Closed']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2027-01-01' => 'Closed']);
 
         $result = $this->schedule('2027-01-01', ['count' => 1, 'adjustment' => 'previous', 'max_shift_days' => 1]);
 
@@ -497,7 +496,7 @@ final class RecurringSchedulesTest extends TestCase
 
     public function test_shift_days_count_calendar_labels_across_dst_instead_of_elapsed_twenty_four_hour_periods(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-03-06' => 'Friday closure']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-03-06' => 'Friday closure']);
 
         $result = $this->schedule('2026-03-06', ['timezone' => 'America/New_York', 'frequency' => 'weekly', 'count' => 1]);
 
@@ -522,8 +521,8 @@ final class RecurringSchedulesTest extends TestCase
 
     public function test_business_date_with_explicitly_empty_working_hours_remains_eligible(): void
     {
-        config()->set('workdays.profiles.warehouse.working_hours', []);
-        config()->set('workdays.profiles.warehouse.special_working_hours', ['2026-11-02' => []]);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', []);
+        config()->set('workdays.definitions.profiles.warehouse.special_working_hours', ['2026-11-02' => []]);
 
         $result = $this->schedule('2026-11-02', ['count' => 1]);
 
@@ -535,7 +534,7 @@ final class RecurringSchedulesTest extends TestCase
     #[DataProvider('recurringHolidayCases')]
     public function test_existing_gregorian_and_jalali_recurring_holidays_adjust_business_dates(string $calendar, string $key, string $anchor, string $expected): void
     {
-        config()->set('workdays.profiles.warehouse.holidays.'.$calendar, [$key => 'Recurring closure']);
+        config()->set('workdays.definitions.profiles.warehouse.holidays.'.$calendar, [$key => 'Recurring closure']);
 
         $result = $this->schedule($anchor, ['count' => 1]);
 
@@ -551,7 +550,7 @@ final class RecurringSchedulesTest extends TestCase
     {
         $this->everyDay();
         $holiday = (new HijriCalendarAdapter('mathematical', 0))->hijriDateToGregorian(1446, 8, 15);
-        config()->set('workdays.profiles.warehouse.holidays.hijri', ['08-15' => 'Hijri closure']);
+        config()->set('workdays.definitions.profiles.warehouse.holidays.hijri', ['08-15' => 'Hijri closure']);
 
         $result = $this->schedule($holiday->toDateString(), ['count' => 1]);
 
@@ -559,11 +558,10 @@ final class RecurringSchedulesTest extends TestCase
         $this->assertSame('gregorian', $result->calendar);
     }
 
-    public function test_database_holiday_adjustments_reuse_one_profile_snapshot_without_writes(): void
+    public function test_config_holiday_adjustments_ignore_database_definitions_and_perform_no_database_access(): void
     {
-        $this->databaseStorage();
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-13', 'type' => 'holiday', 'title' => 'Stored Friday closure', 'is_active' => true]);
-        WorkdaySpecialDate::create(['profile' => 'unrelated', 'date' => '2026-11-06', 'type' => 'holiday', 'title' => 'Other profile', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-13' => 'Friday closure']);
         $connection = $this->app['db']->connection();
         $connection->enableQueryLog();
         $connection->flushQueryLog();
@@ -573,66 +571,63 @@ final class RecurringSchedulesTest extends TestCase
         $connection->disableQueryLog();
 
         $this->assertSame('2026-11-16', $result->occurrences[1]->scheduledDate);
-        $this->assertCount(8, $queries);
+        $this->assertCount(0, $queries);
         foreach ($queries as $query) {
             $this->assertStringStartsWith('select', strtolower(ltrim($query['query'])));
             $this->assertContains('warehouse', $query['bindings']);
             $this->assertNotContains('unrelated', $query['bindings']);
         }
-        $this->assertSame(2, WorkdaySpecialDate::count());
     }
 
-    public function test_database_recurring_rules_are_used_and_config_holiday_maps_are_ignored_by_database_driver(): void
+    public function test_config_recurring_rules_are_used_without_importing_database_definitions(): void
     {
-        $this->databaseStorage();
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-16' => 'Config ignored']);
-        WorkdayHolidayRule::create(['profile' => 'warehouse', 'calendar_type' => 'gregorian', 'month' => 11, 'day' => 13, 'title' => 'Annual closure', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.warehouse.holidays.gregorian', ['11-13' => 'Annual configured closure']);
 
         $result = $this->schedule('2026-11-06', ['frequency' => 'weekly', 'count' => 2]);
 
         $this->assertSame('2026-11-16', $result->occurrences[1]->scheduledDate);
     }
 
-    public function test_chain_database_reopening_matches_ordinary_calendar_and_new_call_observes_deactivation(): void
+    public function test_config_reopening_matches_ordinary_calendar_and_new_call_observes_removal(): void
     {
-        $this->databaseStorage('chain');
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-13' => 'Config closure']);
-        $reopening = WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-13', 'type' => 'working_day', 'title' => 'Reopened', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-13' => 'Config closure']);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days', ['2026-11-13' => 'Config reopening']);
 
         $open = $this->schedule('2026-11-13', ['count' => 1]);
         $this->assertTrue(Workday::profile('warehouse')->isBusinessDay('2026-11-13'));
-        $reopening->update(['is_active' => false]);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days', []);
         $closed = $this->schedule('2026-11-13', ['count' => 1]);
 
         $this->assertSame('2026-11-13', $open->occurrences[0]->scheduledDate);
         $this->assertSame('2026-11-16', $closed->occurrences[0]->scheduledDate);
     }
 
-    public function test_inherited_weekends_holidays_and_extra_days_keep_child_database_identity_without_routing(): void
+    public function test_inherited_config_weekends_holidays_and_extra_days_keep_child_identity_without_routing(): void
     {
-        $this->databaseStorage('chain');
+        $this->publishConflictingDatabaseDefinitions();
         $parent = $this->profile();
         $parent['holidays']['gregorian'] = ['11-20' => 'Recurring closure'];
         $parent['custom_holidays'] = ['2026-11-13' => 'Custom closure'];
         $parent['extra_working_days'] = ['2026-11-14' => 'Extra Saturday'];
-        config()->set('workdays.profiles', ['parent' => $parent, 'child' => ['extends' => 'parent']]);
-        config()->set('workdays.profile_routing', ['invalid' => true]);
-        WorkdaySpecialDate::create(['profile' => 'parent', 'date' => '2026-11-06', 'type' => 'holiday', 'title' => 'Parent only', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles', ['parent' => $parent, 'child' => ['extends' => 'parent']]);
+        config()->set('workdays.definitions.profile_routing', ['invalid' => true]);
 
         $result = $this->schedule('2026-11-06', ['profile' => 'child', 'frequency' => 'weekly']);
 
         $this->assertSame('child', $result->profile);
         $this->assertSame([['2026-11-06', '2026-11-06'], ['2026-11-13', '2026-11-14'], ['2026-11-20', '2026-11-23'], ['2026-11-27', '2026-11-27']], $this->dates($result));
-        WorkdaySpecialDate::create(['profile' => 'child', 'date' => '2026-11-27', 'type' => 'holiday', 'title' => 'Child closure', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.child.custom_holidays', ['2026-11-27' => 'Child closure']);
         $changed = $this->schedule('2026-11-06', ['profile' => 'child', 'frequency' => 'weekly']);
         $this->assertSame('2026-11-30', $changed->occurrences[3]->scheduledDate);
     }
 
-    public function test_missing_database_tables_are_not_disguised_as_skipped_or_closed_occurrences(): void
+    public function test_unavailable_database_source_is_not_disguised_as_a_skipped_or_closed_occurrence(): void
     {
-        config()->set('workdays.storage.driver', 'database');
+        config()->set('workdays.driver', 'database');
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('migrations');
+        $this->expectExceptionMessage('definitions migration');
 
         $this->schedule('2026-11-02', ['count' => 1]);
     }
@@ -695,8 +690,8 @@ final class RecurringSchedulesTest extends TestCase
         $generator = new RecurringScheduleGenerator(function (string $profile) use (&$resolved, $configuration): BusinessDayCalculator {
             $resolved[] = $profile;
 
-            return new BusinessDayCalculator($profile, $configuration);
-        });
+            return new BusinessDayCalculator($profile, $configuration, includeStartDate: false, maxScanDays: 3660, jalaliCalendar: new JalaliCalendarAdapter, hijriCalendar: new HijriCalendarAdapter('umm_al_qura', 0), holidayProvider: new LogicalHolidayProvider(fn (string $selected): array => $configuration));
+        }, 3660);
 
         $result = $generator->generate('2026-01-31', $this->scheduleOptions(['count' => 60]));
 
@@ -711,7 +706,7 @@ final class RecurringSchedulesTest extends TestCase
         $generator = new RecurringScheduleGenerator(function () use (&$resolved): never {
             $resolved++;
             throw new RuntimeException('Calculator resolution should not be reached.');
-        });
+        }, 7);
         try {
             $generator->generate('2026-11-02', $this->scheduleOptions(['frequency' => 'weekly', 'count' => 3]));
             $this->fail('Out-of-horizon recurrence was accepted.');
@@ -725,7 +720,7 @@ final class RecurringSchedulesTest extends TestCase
     {
         // Fixed next/previous projections are nondecreasing for stable calendars; exercise
         // the defensive invariant directly rather than inventing an inconsistent holiday fixture.
-        $generator = new RecurringScheduleGenerator(static fn (): never => throw new RuntimeException('Unused resolver.'));
+        $generator = new RecurringScheduleGenerator(static fn (): never => throw new RuntimeException('Unused resolver.'), 3660);
         $guard = new ReflectionMethod(RecurringScheduleGenerator::class, 'assertChronological');
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessageMatches('/(?=.*0)(?=.*1)(?=.*chronologically)/s');
@@ -743,7 +738,7 @@ final class RecurringSchedulesTest extends TestCase
 
     private function everyDay(): void
     {
-        config()->set('workdays.profiles.warehouse.weekends', []);
+        config()->set('workdays.definitions.profiles.warehouse.weekends', []);
     }
 
     private function scheduleOptions(array $overrides = []): array
@@ -768,18 +763,12 @@ final class RecurringSchedulesTest extends TestCase
         foreach (range(0, $count - 1) as $index) {
             $closed[$anchor->addDays($index)->toDateString()] = 'Closed';
         }
-        config()->set('workdays.profiles.warehouse.custom_holidays', $closed);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', $closed);
     }
 
     private function collisionFixture(): void
     {
         $this->everyDay();
         $this->closeDates('2026-11-02', 7);
-    }
-
-    private function databaseStorage(string $driver = 'database'): void
-    {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', $driver);
     }
 }

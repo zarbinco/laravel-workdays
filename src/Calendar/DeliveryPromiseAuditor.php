@@ -9,36 +9,37 @@ use Composer\InstalledVersions;
 use DateTimeImmutable;
 use DateTimeInterface;
 use DateTimeZone;
-use Illuminate\Database\QueryException;
 use InvalidArgumentException;
-use RuntimeException;
 use Throwable;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContext;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseComparison;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
+use Zarbinco\LaravelWorkdays\Exceptions\WorkingTimeSearchException;
 use Zarbinco\LaravelWorkdays\Holidays\SnapshotHolidayProvider;
-use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
+use Zarbinco\LaravelWorkdays\Support\CutoffDateTimeNormalizer;
 use Zarbinco\LaravelWorkdays\Support\CutoffPolicy;
-use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
-use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
-use Zarbinco\LaravelWorkdays\Support\StorageDriver;
 use Zarbinco\LaravelWorkdays\Support\WeekdayNormalizer;
 use Zarbinco\LaravelWorkdays\Support\WorkingHours;
+use Zarbinco\LaravelWorkdays\Support\WorkingTime;
 use Zarbinco\LaravelWorkdays\Support\WorkingTimeBoundary;
 
 /** Opt-in, operation-local materialization and comparison. The delivery engine stays authoritative. */
 final class DeliveryPromiseAuditor
 {
+    public function __construct(private readonly CalculationContext $context) {}
+
     public function capture(string|DateTimeInterface $receivedAt, array $plan, array $options): DeliveryPromiseSnapshot
     {
         $plan = json_decode(CalendarFingerprint::canonical($plan), true, CalendarFingerprint::MAX_DEPTH + 2, JSON_THROW_ON_ERROR);
-        $validator = new DeliveryPlanner(static fn () => throw new RuntimeException('Validation does not resolve calculators.'));
+        $validator = new DeliveryPlanner($this->context->calculator(...), $this->context->configuration(...), $this->context->maxScanDays, $this->context->hasProfile(...));
         $validator->validatePlan($plan);
         $horizon = $this->horizon($options);
         $receivedAt = $validator->normalizeInput($receivedAt, $plan['timezone']);
@@ -73,6 +74,10 @@ final class DeliveryPromiseAuditor
             $currentVersion = CalendarFingerprint::hash($evidence);
             $current = self::planFrozen($snapshot->receivedAt, $snapshot->plan, $snapshot->horizonDays, $evidence)->estimatedCompletionAt;
         } catch (Throwable $exception) {
+            if ($exception instanceof DefinitionSourceException) {
+                throw $exception;
+            }
+
             $error = $exception->getMessage();
         }
 
@@ -108,7 +113,7 @@ final class DeliveryPromiseAuditor
             throw new InvalidArgumentException('Delivery promise options require only horizon_days, a strict integer from 1 to 31.');
         }
 
-        if ($options['horizon_days'] > ProfileConfigValidator::validateMaxScanDays(config('workdays.max_scan_days', 3660))) {
+        if ($options['horizon_days'] > ProfileConfigValidator::validateMaxScanDays($this->context->maxScanDays)) {
             throw new InvalidArgumentException('Delivery promise horizon_days must not exceed workdays.max_scan_days.');
         }
 
@@ -138,45 +143,24 @@ final class DeliveryPromiseAuditor
     private function materialize(CarbonImmutable $receivedAt, array $plan, int $horizon): array
     {
         $selected = self::referencedProfiles($plan);
-        $profiles = config('workdays.profiles', []);
-
-        if (! is_array($profiles)) {
-            throw new InvalidArgumentException('The workdays profiles config value must be an array.');
-        }
-
-        $driver = config('workdays.storage.driver', 'config');
-
-        if (! is_string($driver) || ! StorageDriver::isSupported($driver)) {
-            throw new InvalidArgumentException('Invalid delivery promise storage driver. Expected config, database or chain.');
-        }
-
-        $hijri = ['method' => config('workdays.hijri.method', 'umm_al_qura'), 'adjustment' => config('workdays.hijri.adjustment', 0)];
-
-        if (! is_string($hijri['method']) || ! is_int($hijri['adjustment'])) {
-            throw new InvalidArgumentException('Invalid Hijri method or adjustment configuration.');
-        }
-
-        new HijriCalendarAdapter($hijri['method'], $hijri['adjustment']);
+        $hijri = $this->context->hijriSettings();
         $evidence = ['schema_version' => 1, 'plan_timezone' => $plan['timezone'], 'anchor_date' => $receivedAt->setTimezone($plan['timezone'])->toDateString(), 'horizon_days' => $horizon, 'hijri' => $hijri, 'profiles' => []];
-        $resolver = new ProfileConfigResolver($profiles);
 
         foreach ($selected as $name => $needsHours) {
             $name = (string) $name;
 
-            if (! array_key_exists($name, $profiles)) {
+            if (! $this->context->hasProfile($name)) {
                 throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $name));
             }
 
-            $effective = is_array($profiles[$name]) && array_key_exists('extends', $profiles[$name])
-                ? $resolver->resolve($name)
-                : ProfileConfigValidator::validate($name, $profiles[$name]);
+            $effective = $this->context->configuration($name);
             $coverage = self::coverage($receivedAt, $plan['timezone'], $plan['profile_timezones'][$name], $horizon);
             $evidence['profiles'][$name] = [
                 'timezone' => $plan['profile_timezones'][$name],
                 'needs_working_hours' => $needsHours,
                 'config' => self::calendarConfig($name, $effective, $needsHours, ($plan['cutoff_profile'] ?? null) === $name, $coverage),
                 'coverage' => $coverage,
-                'holiday_inputs' => $this->holidayInputs($name, $effective, $driver, $coverage),
+                'holiday_inputs' => $this->holidayInputs($effective, $coverage),
                 'days' => [],
             ];
         }
@@ -209,10 +193,9 @@ final class DeliveryPromiseAuditor
         sort($weekends);
         $config = ['weekends' => $weekends];
         $overnight = ($effective['allow_overnight_working_hours'] ?? false) === true;
-        $strict = WorkingHours::hasEnhancedConfig($effective);
         $windows = static fn (array $windows): array => array_map(static fn (TimeWindow $window): array => [$window->start, $window->end], $windows);
-        $weekly = static function (array $hours) use ($profile, $overnight, $strict, $windows): array {
-            return array_map($windows, WorkingHours::normalizeWorkingHours($profile, $hours, $overnight, $strict));
+        $weekly = static function (array $hours) use ($profile, $overnight, $windows): array {
+            return array_map($windows, WorkingHours::normalizeWorkingHours($profile, $hours, $overnight));
         };
 
         if ($needsHours) {
@@ -225,7 +208,7 @@ final class DeliveryPromiseAuditor
             }
 
             if (array_key_exists('extra_working_day_hours', $effective)) {
-                $config['extra_working_day_hours'] = $windows(WorkingHours::normalizeWindows($profile, 'extra_working_day_hours', $effective['extra_working_day_hours'], $overnight, $strict));
+                $config['extra_working_day_hours'] = $windows(WorkingHours::normalizeWindows($profile, 'extra_working_day_hours', $effective['extra_working_day_hours'], $overnight));
             }
 
             if (array_key_exists('special_working_hours', $effective)) {
@@ -233,7 +216,7 @@ final class DeliveryPromiseAuditor
 
                 foreach ($effective['special_working_hours'] as $date => $hours) {
                     if ($date >= $coverage['provider_from'] && $date <= $coverage['through']) {
-                        $config['special_working_hours'][$date] = $windows(WorkingHours::normalizeWindows($profile, 'special_working_hours.'.$date, $hours, $overnight, true));
+                        $config['special_working_hours'][$date] = $windows(WorkingHours::normalizeWindows($profile, 'special_working_hours.'.$date, $hours, $overnight));
                     }
                 }
             }
@@ -267,49 +250,21 @@ final class DeliveryPromiseAuditor
         return $config;
     }
 
-    private function holidayInputs(string $profile, array $effective, string $driver, array $coverage): array
+    private function holidayInputs(array $effective, array $coverage): array
     {
         $inputs = ['recurring' => ['gregorian' => [], 'jalali' => [], 'hijri' => []], 'custom' => [], 'extra' => []];
 
-        if ($driver !== StorageDriver::DATABASE) {
-            foreach ($inputs['recurring'] as $calendar => $_) {
-                foreach ($effective['holidays'][$calendar] ?? [] as $key => $title) {
-                    $inputs['recurring'][$calendar][$key] = ['title' => is_string($title) ? $title : null, 'source' => 'config'];
-                }
-            }
-
-            foreach (['custom' => 'custom_holidays', 'extra' => 'extra_working_days'] as $section => $key) {
-                foreach ($effective[$key] ?? [] as $date => $title) {
-                    if ($date >= $coverage['provider_from'] && $date <= $coverage['through']) {
-                        $inputs[$section][$date] = ['title' => $title, 'source' => 'config'];
-                    }
-                }
+        foreach ($inputs['recurring'] as $calendar => $_) {
+            foreach ($effective['holidays'][$calendar] ?? [] as $key => $title) {
+                $inputs['recurring'][$calendar][$key] = ['title' => is_string($title) ? $title : null, 'source' => $this->context->definitions->source];
             }
         }
 
-        if ($driver !== StorageDriver::CONFIG) {
-            try {
-                $rules = WorkdayHolidayRule::query()->where('profile', $profile)->where('is_active', true)->get(['profile', 'calendar_type', 'month', 'day', 'title']);
-                $dates = WorkdaySpecialDate::query()->where('profile', $profile)->where('is_active', true)->whereDate('date', '>=', $coverage['provider_from'])->whereDate('date', '<=', $coverage['through'])->get(['profile', 'date', 'type', 'title']);
-            } catch (QueryException $exception) {
-                throw new RuntimeException('Workdays database storage is enabled, but the workday tables are not available. Publish and run the workdays migrations.', previous: $exception);
-            }
-
-            foreach ($rules as $rule) {
-                if (! is_string($rule->profile) || $rule->profile === '' || ! is_string($rule->calendar_type) || ! HolidayKeyValidator::isSupportedCalendar($rule->calendar_type)) {
-                    throw new InvalidArgumentException('Invalid database holiday rule profile or calendar_type.');
+        foreach (['custom' => 'custom_holidays', 'extra' => 'extra_working_days'] as $section => $key) {
+            foreach ($effective[$key] ?? [] as $date => $title) {
+                if ($date >= $coverage['provider_from'] && $date <= $coverage['through']) {
+                    $inputs[$section][$date] = ['title' => $title, 'source' => $this->context->definitions->source];
                 }
-
-                HolidayKeyValidator::validateMonthDay($rule->calendar_type, (int) $rule->month, (int) $rule->day, $profile);
-                $inputs['recurring'][$rule->calendar_type][sprintf('%02d-%02d', $rule->month, $rule->day)] = ['title' => is_string($rule->title) ? $rule->title : null, 'source' => 'database'];
-            }
-
-            foreach ($dates as $date) {
-                if (! is_string($date->profile) || $date->profile === '' || ! in_array($date->type, ['holiday', 'working_day'], true) || $date->date === null) {
-                    throw new InvalidArgumentException('Invalid database special date profile, type or date.');
-                }
-
-                $inputs[$date->type === 'holiday' ? 'custom' : 'extra'][$date->date->toDateString()] = ['title' => is_string($date->title) ? $date->title : null, 'source' => 'database'];
             }
         }
 
@@ -318,7 +273,7 @@ final class DeliveryPromiseAuditor
 
     private static function calculator(string $profile, array $evidence, int $limit, SnapshotHolidayProvider $provider): BusinessDayCalculator
     {
-        return new BusinessDayCalculator($profile, $evidence['profiles'][$profile]['config'], maxScanDays: $limit, hijriCalendar: new HijriCalendarAdapter($evidence['hijri']['method'], $evidence['hijri']['adjustment']), holidayProvider: $provider);
+        return new BusinessDayCalculator($profile, $evidence['profiles'][$profile]['config'], false, $limit, new JalaliCalendarAdapter, new HijriCalendarAdapter($evidence['hijri']['method'], $evidence['hijri']['adjustment']), $provider);
     }
 
     private static function planFrozen(CarbonImmutable $receivedAt, array $plan, int $horizon, array $evidence): DeliveryPlanResult
@@ -329,7 +284,8 @@ final class DeliveryPromiseAuditor
             static fn (string $profile, int $limit): BusinessDayCalculator => self::calculator($profile, $evidence, $limit, $provider),
             static fn (string $profile): array => $evidence['profiles'][$profile]['config'],
             $horizon,
-            array_keys($plan['profile_timezones']),
+            static fn (string $profile): bool => array_key_exists($profile, $plan['profile_timezones']),
+            $horizon,
         ))->plan($receivedAt, $plan);
     }
 
@@ -363,11 +319,7 @@ final class DeliveryPromiseAuditor
                     $row['holiday_reasons'] = $info['reasons'];
 
                     if ($definition['needs_working_hours']) {
-                        $enhanced = WorkingHours::hasEnhancedConfig($definition['config']);
-
-                        foreach ($calculator->workingWindowsFor($date) as $window) {
-                            $start = $enhanced ? WorkingTimeBoundary::at($profile, $label, $window->startMinutes(), $zone, $window->startMinutes() === 0) : $date->startOfDay()->addMinutes($window->startMinutes());
-                            $end = $enhanced ? WorkingTimeBoundary::at($profile, $label, $window->endMinutes(), $zone, $window->endMinutes() === 1440) : $date->startOfDay()->addMinutes($window->endMinutes());
+                        foreach ($calculator->workingIntervalsFor($date) as [$start, $end]) {
                             $row['effective_working_windows'][] = ['start' => $start->setTimezone('UTC')->format('Y-m-d\TH:i:s.uP'), 'end' => $end->setTimezone('UTC')->format('Y-m-d\TH:i:s.uP')];
                         }
                     }
@@ -387,8 +339,10 @@ final class DeliveryPromiseAuditor
     /** @internal Validate portable captured data, never today's profiles or database records. */
     public static function validateFrozen(DeliveryPromiseSnapshot $snapshot): void
     {
-        if (CalendarFingerprint::canonical($snapshot->runtimeMetadata) !== CalendarFingerprint::canonical(self::runtimeMetadata())) {
-            return; // A different implementation environment cannot disprove historical calculated evidence.
+        self::validateCapturedIntervals($snapshot);
+        $runtime = self::runtimeMetadata();
+        if ($snapshot->runtimeMetadata['timezone_database_version'] !== $runtime['timezone_database_version']) {
+            return; // UTC interval checks remain authoritative when historical date labels differ.
         }
 
         foreach ($snapshot->calendarEvidence['profiles'] as $profile => $definition) {
@@ -405,23 +359,108 @@ final class DeliveryPromiseAuditor
             throw new InvalidArgumentException('Snapshot daily calendar evidence is inconsistent with the captured rules.');
         }
 
-        // A reduced/invalid current global limit must not invalidate a portable historical result.
-        $maximum = config('workdays.max_scan_days', 3660);
+        // The captured, structurally validated bound controls replay independently of live settings.
+        $result = self::planFrozen($snapshot->receivedAt, $snapshot->plan, $snapshot->horizonDays, $snapshot->calendarEvidence);
 
-        if (is_int($maximum) && $maximum >= $snapshot->horizonDays) {
-            $result = self::planFrozen($snapshot->receivedAt, $snapshot->plan, $snapshot->horizonDays, $snapshot->calendarEvidence);
+        if (CalendarFingerprint::canonical($result->toArray()) !== CalendarFingerprint::canonical($snapshot->originalResult->toArray())) {
+            throw new InvalidArgumentException('Snapshot original result is inconsistent with the captured calendar and plan.');
+        }
+    }
 
-            if (CalendarFingerprint::canonical($result->toArray()) !== CalendarFingerprint::canonical($snapshot->originalResult->toArray())) {
-                throw new InvalidArgumentException('Snapshot original result is inconsistent with the captured calendar and plan.');
+    /** Reuse the exact engine against portable UTC facts even when local tzdb rules changed. */
+    private static function validateCapturedIntervals(DeliveryPromiseSnapshot $snapshot): void
+    {
+        $intervals = [];
+        $engines = [];
+        // The codec already bounds every result by its original horizon in elapsed UTC time.
+        $margin = $snapshot->horizonDays + 4;
+
+        foreach ($snapshot->calendarEvidence['profiles'] as $profile => $definition) {
+            $windows = [];
+            foreach ($definition['days'] as $day) {
+                foreach ($day['effective_working_windows'] ?? [] as $window) {
+                    $windows[] = [CutoffDateTimeNormalizer::toImmutable($window['start'], 'UTC'), CutoffDateTimeNormalizer::toImmutable($window['end'], 'UTC')];
+                }
+            }
+            usort($windows, static fn (array $a, array $b): int => $a[0] <=> $b[0]);
+            $intervals[$profile] = [];
+            foreach ($windows as [$start, $end]) {
+                $last = count($intervals[$profile]) - 1;
+                if ($last >= 0 && $start->lessThan($intervals[$profile][$last][1])) {
+                    $intervals[$profile][$last][1] = $end->max($intervals[$profile][$last][1]);
+                } else {
+                    $intervals[$profile][] = [$start, $end];
+                }
+            }
+            $engines[$profile] = self::capturedEngine((string) $profile, $intervals[$profile], $margin);
+        }
+
+        foreach ($snapshot->plan['stages'] as $index => $stage) {
+            $result = $snapshot->originalResult->stages[$index];
+            if ($stage['type'] === 'business_days') {
+                if ($result->startedAt->format('u') !== $result->completedAt->format('u')) {
+                    throw new InvalidArgumentException('Snapshot business-day transit must preserve its original microseconds.');
+                }
+
+                continue;
+            }
+            $engine = $engines[$stage['type'] === 'work' ? $stage['profile'] : $stage['profiles'][0]];
+            if ($stage['type'] === 'handoff') {
+                $overlap = [];
+                $other = $intervals[$stage['profiles'][1]];
+                $rightIndex = 0;
+                foreach ($intervals[$stage['profiles'][0]] as [$left, $right]) {
+                    while (isset($other[$rightIndex]) && $other[$rightIndex][1]->lessThanOrEqualTo($left)) {
+                        $rightIndex++;
+                    }
+                    for ($probe = $rightIndex; isset($other[$probe]) && $other[$probe][0]->lessThan($right); $probe++) {
+                        $start = $left->max($other[$probe][0]);
+                        $end = $right->min($other[$probe][1]);
+                        if ($end->greaterThan($start)) {
+                            $overlap[] = [$start, $end];
+                        }
+                    }
+                }
+                $engine = self::capturedEngine(implode(', ', $stage['profiles']), $overlap, $margin);
+            }
+
+            try {
+                $start = $engine->seek($result->readyAt, 1);
+                $end = $stage['type'] === 'work' ? $engine->consume($start, $stage['minutes']) : $start;
+            } catch (WorkingTimeSearchException $exception) {
+                throw new InvalidArgumentException('Snapshot stage cannot be resolved from its captured UTC working intervals.', previous: $exception);
+            }
+            if (! $start->equalTo($result->startedAt) || ! $end->equalTo($result->completedAt)) {
+                throw new InvalidArgumentException('Snapshot original result is inconsistent with its captured UTC working intervals.');
             }
         }
+    }
+
+    /** @param list<array{CarbonImmutable, CarbonImmutable}> $intervals */
+    private static function capturedEngine(string $profile, array $intervals, int $margin): WorkingTime
+    {
+        return new WorkingTime($profile, $margin, static function (CarbonImmutable $date) use ($intervals): array {
+            $start = $date->startOfDay();
+            $end = $start->addDay();
+            $daily = [];
+            foreach ($intervals as [$left, $right]) {
+                if ($left->greaterThanOrEqualTo($end)) {
+                    break;
+                }
+                if ($right->greaterThan($start)) {
+                    $daily[] = [$left->max($start), $right->min($end)];
+                }
+            }
+
+            return $daily;
+        });
     }
 
     public static function runtimeMetadata(): array
     {
         $version = static fn (string $package): ?string => class_exists(InstalledVersions::class) && InstalledVersions::isInstalled($package) ? InstalledVersions::getPrettyVersion($package) : null;
 
-        return ['calculation_schema_version' => 1, 'php_version' => PHP_VERSION, 'carbon_version' => $version('nesbot/carbon'), 'verta_version' => $version('hekmatinasser/verta'), 'islamic_calendar_version' => $version('islamic-network/calendar'), 'timezone_database_version' => function_exists('timezone_version_get') ? timezone_version_get() : null];
+        return ['calculation_schema_version' => CalculationSemantics::CURRENT, 'php_version' => PHP_VERSION, 'carbon_version' => $version('nesbot/carbon'), 'verta_version' => $version('hekmatinasser/verta'), 'islamic_calendar_version' => $version('islamic-network/calendar'), 'timezone_database_version' => function_exists('timezone_version_get') ? timezone_version_get() : null];
     }
 
     private static function sectionChanged(array $old, array $current, string $section): bool

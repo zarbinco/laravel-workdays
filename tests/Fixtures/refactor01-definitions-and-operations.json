@@ -1,0 +1,421 @@
+{
+    "definitions": {
+        "default_profile": "warehouse",
+        "include_start_date": false,
+        "hijri": {
+            "method": "mathematical",
+            "adjustment": 0
+        },
+        "profile_routing": {
+            "fallback_profile": "warehouse",
+            "rules": [
+                {
+                    "id": "support",
+                    "match": {
+                        "kind": "support"
+                    },
+                    "profile": "child"
+                }
+            ]
+        },
+        "profiles": {
+            "parent": {
+                "weekends": [
+                    "Saturday",
+                    "Sunday"
+                ],
+                "working_hours": {
+                    "Monday": [
+                        [
+                            "09:00",
+                            "12:00"
+                        ],
+                        [
+                            "13:00",
+                            "17:00"
+                        ]
+                    ],
+                    "Tuesday": [
+                        [
+                            "09:00",
+                            "12:00"
+                        ],
+                        [
+                            "13:00",
+                            "17:00"
+                        ]
+                    ],
+                    "Wednesday": [
+                        [
+                            "09:00",
+                            "12:00"
+                        ],
+                        [
+                            "13:00",
+                            "17:00"
+                        ]
+                    ],
+                    "Thursday": [
+                        [
+                            "09:00",
+                            "12:00"
+                        ],
+                        [
+                            "13:00",
+                            "17:00"
+                        ]
+                    ],
+                    "Friday": [
+                        [
+                            "09:00",
+                            "12:00"
+                        ],
+                        [
+                            "13:00",
+                            "17:00"
+                        ]
+                    ]
+                },
+                "holidays": {
+                    "gregorian": [],
+                    "jalali": [],
+                    "hijri": []
+                },
+                "custom_holidays": {
+                    "2026-11-03": "Shared closure"
+                },
+                "extra_working_days": {
+                    "2026-11-07": "Extra Saturday"
+                },
+                "extra_working_day_hours": [
+                    [
+                        "09:00",
+                        "17:00"
+                    ]
+                ],
+                "cutoff": {
+                    "timezone": "UTC",
+                    "time": "14:00"
+                }
+            },
+            "warehouse": {
+                "extends": "parent"
+            },
+            "child": {
+                "extends": "parent",
+                "working_hours": {
+                    "Thursday": [
+                        [
+                            "09:00",
+                            "12:00"
+                        ]
+                    ]
+                }
+            },
+            "carrier": {
+                "weekends": [
+                    "Saturday",
+                    "Sunday"
+                ],
+                "working_hours": {
+                    "Monday": [
+                        [
+                            "12:00",
+                            "18:00"
+                        ]
+                    ],
+                    "Tuesday": [
+                        [
+                            "12:00",
+                            "18:00"
+                        ]
+                    ],
+                    "Wednesday": [
+                        [
+                            "12:00",
+                            "18:00"
+                        ]
+                    ],
+                    "Thursday": [
+                        [
+                            "12:00",
+                            "18:00"
+                        ]
+                    ],
+                    "Friday": [
+                        [
+                            "12:00",
+                            "18:00"
+                        ]
+                    ]
+                },
+                "holidays": {
+                    "gregorian": [],
+                    "jalali": [],
+                    "hijri": []
+                },
+                "custom_holidays": {
+                    "2026-11-03": "Shared closure"
+                },
+                "extra_working_days": {
+                    "2026-11-07": "Extra Saturday"
+                },
+                "extra_working_day_hours": [
+                    [
+                        "09:00",
+                        "17:00"
+                    ]
+                ],
+                "cutoff": {
+                    "timezone": "UTC",
+                    "time": "14:00"
+                }
+            },
+            "night": {
+                "weekends": [
+                    "Saturday",
+                    "Sunday"
+                ],
+                "working_hours": {
+                    "Monday": [
+                        [
+                            "22:00",
+                            "06:00"
+                        ]
+                    ]
+                },
+                "holidays": {
+                    "gregorian": [],
+                    "jalali": [],
+                    "hijri": []
+                },
+                "custom_holidays": [],
+                "extra_working_days": {
+                    "2026-11-07": "Extra Saturday"
+                },
+                "extra_working_day_hours": [
+                    [
+                        "09:00",
+                        "17:00"
+                    ]
+                ],
+                "cutoff": {
+                    "timezone": "UTC",
+                    "time": "14:00"
+                },
+                "allow_overnight_working_hours": true
+            },
+            "fold": {
+                "weekends": [],
+                "working_hours": {
+                    "Sunday": [
+                        [
+                            "00:00",
+                            "04:00"
+                        ]
+                    ]
+                },
+                "holidays": {
+                    "gregorian": [],
+                    "jalali": [],
+                    "hijri": []
+                },
+                "custom_holidays": [],
+                "extra_working_days": {
+                    "2026-11-07": "Extra Saturday"
+                },
+                "extra_working_day_hours": [
+                    [
+                        "09:00",
+                        "17:00"
+                    ]
+                ],
+                "cutoff": {
+                    "timezone": "UTC",
+                    "time": "14:00"
+                },
+                "allow_overnight_working_hours": true
+            }
+        }
+    },
+    "operations": [
+        {
+            "id": "day",
+            "operation": "is_business_day",
+            "profile": "child",
+            "date": "2026-11-03"
+        },
+        {
+            "id": "windows",
+            "operation": "working_windows",
+            "profile": "child",
+            "date": "2026-11-05"
+        },
+        {
+            "id": "days",
+            "operation": "add_business_days",
+            "profile": "warehouse",
+            "date": "2026-11-02",
+            "days": 3
+        },
+        {
+            "id": "minutes",
+            "operation": "add_business_minutes",
+            "profile": "warehouse",
+            "datetime": "2026-11-02T11:30:12.123456Z",
+            "minutes": 120
+        },
+        {
+            "id": "cutoff",
+            "operation": "resolve_cutoff",
+            "profile": "warehouse",
+            "received_at": "2026-11-02T14:00:00.000000Z"
+        },
+        {
+            "id": "plan",
+            "operation": "plan_delivery",
+            "received_at": "2026-11-02T10:00:12.123456Z",
+            "plan": {
+                "timezone": "UTC",
+                "profile_timezones": {
+                    "warehouse": "UTC",
+                    "carrier": "UTC"
+                },
+                "cutoff_profile": "warehouse",
+                "stages": [
+                    {
+                        "id": "prepare",
+                        "type": "work",
+                        "profile": "warehouse",
+                        "minutes": 120
+                    },
+                    {
+                        "id": "pickup",
+                        "type": "handoff",
+                        "profiles": [
+                            "warehouse",
+                            "carrier"
+                        ]
+                    },
+                    {
+                        "id": "deliver",
+                        "type": "work",
+                        "profile": "carrier",
+                        "minutes": 60
+                    }
+                ]
+            }
+        },
+        {
+            "id": "slots",
+            "operation": "delivery_slots",
+            "ready_at": "2026-11-02T10:30:12.123456Z",
+            "options": {
+                "profile": "warehouse",
+                "timezone": "UTC",
+                "days": 3,
+                "duration_minutes": 60,
+                "step_minutes": 30,
+                "max_slots": 10
+            }
+        },
+        {
+            "id": "recurrence",
+            "operation": "recurring_schedule",
+            "anchor_date": "2026-11-02",
+            "options": {
+                "profile": "child",
+                "timezone": "UTC",
+                "frequency": "weekly",
+                "interval": 1,
+                "count": 3,
+                "adjustment": "next"
+            }
+        },
+        {
+            "id": "sla",
+            "operation": "evaluate_sla",
+            "started_at": "2026-11-02T11:30:12.123456Z",
+            "evaluated_at": "2026-11-04T10:00:12.654321Z",
+            "options": {
+                "profile": "warehouse",
+                "timezone": "UTC",
+                "target_minutes": 180,
+                "pauses": [
+                    {
+                        "started_at": "2026-11-02T13:00:00Z",
+                        "ended_at": "2026-11-02T14:00:00Z"
+                    }
+                ]
+            }
+        },
+        {
+            "id": "reverse",
+            "operation": "reverse_plan_delivery",
+            "desired_completion_at": "2026-11-04T16:00:12.654321Z",
+            "plan": {
+                "timezone": "UTC",
+                "profile_timezones": {
+                    "warehouse": "UTC",
+                    "carrier": "UTC"
+                },
+                "cutoff_profile": "warehouse",
+                "stages": [
+                    {
+                        "id": "prepare",
+                        "type": "work",
+                        "profile": "warehouse",
+                        "minutes": 120
+                    },
+                    {
+                        "id": "pickup",
+                        "type": "handoff",
+                        "profiles": [
+                            "warehouse",
+                            "carrier"
+                        ]
+                    },
+                    {
+                        "id": "deliver",
+                        "type": "work",
+                        "profile": "carrier",
+                        "minutes": 60
+                    }
+                ]
+            },
+            "options": {
+                "lookback_days": 3
+            }
+        }
+    ],
+    "plan": {
+        "timezone": "UTC",
+        "profile_timezones": {
+            "warehouse": "UTC",
+            "carrier": "UTC"
+        },
+        "cutoff_profile": "warehouse",
+        "stages": [
+            {
+                "id": "prepare",
+                "type": "work",
+                "profile": "warehouse",
+                "minutes": 120
+            },
+            {
+                "id": "pickup",
+                "type": "handoff",
+                "profiles": [
+                    "warehouse",
+                    "carrier"
+                ]
+            },
+            {
+                "id": "deliver",
+                "type": "work",
+                "profile": "carrier",
+                "minutes": 60
+            }
+        ]
+    }
+}

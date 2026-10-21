@@ -5,8 +5,16 @@ declare(strict_types=1);
 namespace Zarbinco\LaravelWorkdays;
 
 use Illuminate\Support\ServiceProvider;
+use Zarbinco\LaravelWorkdays\Commands\ExportDefinitionsCommand;
+use Zarbinco\LaravelWorkdays\Commands\ImportDefinitionsCommand;
 use Zarbinco\LaravelWorkdays\Commands\ImportIranCalendarCommand;
 use Zarbinco\LaravelWorkdays\Commands\InstallCommand;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory;
+use Zarbinco\LaravelWorkdays\Configuration\ConfigDefinitionSource;
+use Zarbinco\LaravelWorkdays\Configuration\DatabaseDefinitionRepository;
+use Zarbinco\LaravelWorkdays\Configuration\DatabaseDefinitionSource;
+use Zarbinco\LaravelWorkdays\Configuration\DefinitionSource;
+use Zarbinco\LaravelWorkdays\Configuration\SelectedDefinitionSource;
 use Zarbinco\LaravelWorkdays\Support\CarbonMacroRegistrar;
 
 final class WorkdaysServiceProvider extends ServiceProvider
@@ -15,7 +23,10 @@ final class WorkdaysServiceProvider extends ServiceProvider
     {
         $this->mergeConfigFrom(__DIR__.'/../config/workdays.php', 'workdays');
 
-        $this->app->singleton(WorkdayManager::class, fn (): WorkdayManager => new WorkdayManager);
+        $this->app->singleton(DatabaseDefinitionRepository::class, fn (): DatabaseDefinitionRepository => new DatabaseDefinitionRepository($this->app['config'], $this->app['db']));
+        $this->app->singleton(DefinitionSource::class, fn (): DefinitionSource => new SelectedDefinitionSource($this->app['config'], new ConfigDefinitionSource($this->app['config']), new DatabaseDefinitionSource($this->app->make(DatabaseDefinitionRepository::class))));
+        $this->app->singleton(CalculationContextFactory::class, fn (): CalculationContextFactory => new CalculationContextFactory($this->app['config'], $this->app->make(DefinitionSource::class)));
+        $this->app->singleton(WorkdayManager::class, fn (): WorkdayManager => new WorkdayManager($this->app->make(CalculationContextFactory::class)));
         $this->app->alias(WorkdayManager::class, 'workdays');
     }
 
@@ -25,8 +36,7 @@ final class WorkdaysServiceProvider extends ServiceProvider
 
         $migrationPath = __DIR__.'/../database/migrations';
         $migrations = [
-            $migrationPath.'/2026_01_01_000001_create_workday_holiday_rules_table.php' => database_path('migrations/2026_01_01_000001_create_workday_holiday_rules_table.php'),
-            $migrationPath.'/2026_01_01_000002_create_workday_special_dates_table.php' => database_path('migrations/2026_01_01_000002_create_workday_special_dates_table.php'),
+            $migrationPath.'/2026_10_20_000001_create_workday_definitions_tables.php' => database_path('migrations/2026_10_20_000001_create_workday_definitions_tables.php'),
         ];
 
         $this->publishes([
@@ -47,6 +57,8 @@ final class WorkdaysServiceProvider extends ServiceProvider
             $this->commands([
                 ImportIranCalendarCommand::class,
                 InstallCommand::class,
+                ExportDefinitionsCommand::class,
+                ImportDefinitionsCommand::class,
             ]);
         }
     }

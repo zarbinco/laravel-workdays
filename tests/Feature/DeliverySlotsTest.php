@@ -12,17 +12,18 @@ use Error;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
+use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlot;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
 use Zarbinco\LaravelWorkdays\Data\Holiday;
 use Zarbinco\LaravelWorkdays\Delivery\DeliverySlotGenerator;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
-use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
+use Zarbinco\LaravelWorkdays\Holidays\LogicalHolidayProvider;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
 
@@ -33,10 +34,10 @@ final class DeliverySlotsTest extends TestCase
         parent::setUp();
 
         config()->set('app.timezone', 'Pacific/Honolulu');
-        config()->set('workdays.default_profile', 'last_mile');
-        config()->set('workdays.storage.driver', 'config');
+        config()->set('workdays.definitions.default_profile', 'last_mile');
+        config()->set('workdays.driver', 'config');
         config()->set('workdays.max_scan_days', 30);
-        config()->set('workdays.profiles', [
+        config()->set('workdays.definitions.profiles', [
             'last_mile' => $this->profile($this->hours([['09:00', '12:00'], ['13:00', '17:00']])),
             'warehouse' => $this->profile($this->hours([['09:00', '17:00']])) + [
                 'cutoff' => ['timezone' => 'Asia/Tehran', 'time' => '14:00'],
@@ -110,7 +111,7 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_d_holiday_and_weekend_are_skipped_within_calendar_date_horizon(): void
     {
-        config()->set('workdays.profiles.last_mile.custom_holidays', ['2026-07-03' => 'Fixture Friday closure']);
+        config()->set('workdays.definitions.profiles.last_mile.custom_holidays', ['2026-07-03' => 'Fixture Friday closure']);
 
         $result = Workday::deliverySlots('2026-07-02T17:01:00Z', $this->slotOptions(['days' => 5]));
 
@@ -122,7 +123,7 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_e_half_day_has_only_the_two_morning_slots(): void
     {
-        config()->set('workdays.profiles.last_mile.working_hours.Thursday', [['09:00', '12:00']]);
+        config()->set('workdays.definitions.profiles.last_mile.working_hours.Thursday', [['09:00', '12:00']]);
 
         $result = Workday::deliverySlots('2026-07-02T08:00:00Z', $this->slotOptions(['days' => 1]));
 
@@ -131,9 +132,9 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_f_extra_working_day_reopens_a_holiday_with_existing_fallback_hours(): void
     {
-        config()->set('workdays.profiles.last_mile.custom_holidays', ['2026-07-04' => 'Configured closure']);
-        config()->set('workdays.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Extra Saturday']);
-        config()->set('workdays.profiles.last_mile.extra_working_day_hours', [['10:00', '14:00']]);
+        config()->set('workdays.definitions.profiles.last_mile.custom_holidays', ['2026-07-04' => 'Configured closure']);
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Extra Saturday']);
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_day_hours', [['10:00', '14:00']]);
 
         $result = Workday::deliverySlots('2026-07-04T08:00:00Z', $this->slotOptions(['days' => 1]));
 
@@ -144,7 +145,7 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_f_extra_working_day_without_any_hours_preserves_the_configuration_error(): void
     {
-        config()->set('workdays.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Extra Saturday']);
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Extra Saturday']);
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('extra_working_day_hours');
 
@@ -153,9 +154,9 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_extra_working_day_prefers_configured_weekday_hours_over_fallback(): void
     {
-        config()->set('workdays.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Extra Saturday']);
-        config()->set('workdays.profiles.last_mile.working_hours.Saturday', [['09:00', '11:00']]);
-        config()->set('workdays.profiles.last_mile.extra_working_day_hours', [['10:00', '14:00']]);
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Extra Saturday']);
+        config()->set('workdays.definitions.profiles.last_mile.working_hours.Saturday', [['09:00', '11:00']]);
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_day_hours', [['10:00', '14:00']]);
 
         $result = Workday::deliverySlots('2026-07-04T08:00:00Z', $this->slotOptions(['days' => 1]));
 
@@ -164,7 +165,7 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_g_short_windows_produce_a_valid_empty_result(): void
     {
-        config()->set('workdays.profiles.last_mile.working_hours', $this->hours([['09:00', '10:00']]));
+        config()->set('workdays.definitions.profiles.last_mile.working_hours', $this->hours([['09:00', '10:00']]));
 
         $result = Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions(['days' => 1]));
 
@@ -179,14 +180,14 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_touching_windows_do_not_allow_a_slot_to_span_two_windows(): void
     {
-        config()->set('workdays.profiles.last_mile.working_hours', $this->hours([['09:00', '10:00'], ['10:00', '11:00']]));
+        config()->set('workdays.definitions.profiles.last_mile.working_hours', $this->hours([['09:00', '10:00'], ['10:00', '11:00']]));
 
         $this->assertSame([], Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions(['days' => 1]))->slots);
     }
 
     public function test_grid_is_anchored_to_each_non_round_window_opening(): void
     {
-        config()->set('workdays.profiles.last_mile.working_hours', $this->hours([['09:10', '11:00'], ['13:25', '16:00']]));
+        config()->set('workdays.definitions.profiles.last_mile.working_hours', $this->hours([['09:10', '11:00'], ['13:25', '16:00']]));
         $options = $this->slotOptions(['days' => 1, 'duration_minutes' => 60, 'step_minutes' => 45]);
 
         $first = Workday::deliverySlots('2026-06-29T09:12:01Z', $options);
@@ -201,7 +202,7 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_step_may_exceed_duration_and_need_not_divide_window_length(): void
     {
-        config()->set('workdays.profiles.last_mile.working_hours', $this->hours([['09:00', '12:00']]));
+        config()->set('workdays.definitions.profiles.last_mile.working_hours', $this->hours([['09:00', '12:00']]));
 
         $result = Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions(['days' => 1, 'duration_minutes' => 30, 'step_minutes' => 100]));
 
@@ -225,7 +226,7 @@ final class DeliverySlotsTest extends TestCase
 
         $this->assertCount(50, $result->slots);
         $this->assertSame($this->format($result->readyAt), $this->format($result->eligibleFromAt));
-        $this->assertArrayNotHasKey('cutoff', config('workdays.profiles.last_mile'));
+        $this->assertArrayNotHasKey('cutoff', config('workdays.definitions.profiles.last_mile'));
     }
 
     #[DataProvider('requiredOptions')]
@@ -294,10 +295,10 @@ final class DeliverySlotsTest extends TestCase
     }
 
     #[DataProvider('invalidScanLimits')]
-    public function test_invalid_global_scan_limit_is_reported_as_slot_configuration_error(mixed $limit): void
+    public function test_invalid_global_scan_limit_is_reported_at_the_source_boundary(mixed $limit): void
     {
         config()->set('workdays.max_scan_days', $limit);
-        $this->expectException(WorkdayConfigurationException::class);
+        $this->expectException(DefinitionSourceException::class);
         $this->expectExceptionMessage('max_scan_days');
 
         Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions());
@@ -321,7 +322,7 @@ final class DeliverySlotsTest extends TestCase
     #[DataProvider('invalidWorkingHours')]
     public function test_slot_calls_require_valid_working_hours(mixed $hours): void
     {
-        config()->set('workdays.profiles.last_mile.working_hours', $hours);
+        config()->set('workdays.definitions.profiles.last_mile.working_hours', $hours);
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('working_hours');
 
@@ -335,9 +336,9 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_missing_working_hours_is_rejected_even_if_notice_excludes_the_whole_range(): void
     {
-        $profile = config('workdays.profiles.last_mile');
+        $profile = config('workdays.definitions.profiles.last_mile');
         unset($profile['working_hours']);
-        config()->set('workdays.profiles.last_mile', $profile);
+        config()->set('workdays.definitions.profiles.last_mile', $profile);
         $this->assertTrue(Workday::profile('last_mile')->isBusinessDay('2026-06-29'));
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('Working hours');
@@ -470,7 +471,7 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_profile_selection_is_isolated_across_calls(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-06-29' => 'Warehouse closure']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-06-29' => 'Warehouse closure']);
         $first = Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions(['days' => 1]));
 
         $this->assertSame([], Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions(['profile' => 'warehouse', 'days' => 1]))->slots);
@@ -499,7 +500,7 @@ final class DeliverySlotsTest extends TestCase
         foreach (range(0, 5) as $offset) {
             $closures[CarbonImmutable::parse('2026-06-29', 'UTC')->addDays($offset)->toDateString()] = 'Closed';
         }
-        config()->set('workdays.profiles.last_mile.custom_holidays', $closures);
+        config()->set('workdays.definitions.profiles.last_mile.custom_holidays', $closures);
 
         $result = Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions(['days' => 7, 'max_slots' => 200]));
 
@@ -513,7 +514,7 @@ final class DeliverySlotsTest extends TestCase
         foreach (range(0, 30) as $offset) {
             $closures[CarbonImmutable::parse('2026-06-01', 'UTC')->addDays($offset)->toDateString()] = 'Closed';
         }
-        config()->set('workdays.profiles.last_mile.custom_holidays', $closures);
+        config()->set('workdays.definitions.profiles.last_mile.custom_holidays', $closures);
 
         $this->assertSame([], Workday::deliverySlots('2026-06-01T08:00:00Z', $this->slotOptions(['days' => 31, 'max_slots' => 200]))->slots);
     }
@@ -557,7 +558,7 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_max_slots_one_returns_the_first_option_and_stops_before_later_bad_calendar_date(): void
     {
-        config()->set('workdays.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Missing Saturday hours']);
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Missing Saturday hours']);
 
         $result = Workday::deliverySlots('2026-07-03T08:00:00Z', $this->slotOptions(['max_slots' => 1]));
 
@@ -586,7 +587,7 @@ final class DeliverySlotsTest extends TestCase
 
     public function test_recurring_config_holiday_is_reused_through_the_calendar(): void
     {
-        config()->set('workdays.profiles.last_mile.holidays.gregorian', ['06-29' => 'Annual closure']);
+        config()->set('workdays.definitions.profiles.last_mile.holidays.gregorian', ['06-29' => 'Annual closure']);
 
         $result = Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions());
 
@@ -594,12 +595,11 @@ final class DeliverySlotsTest extends TestCase
         $this->assertSame('2026-06-30 09:00', $result->slots[0]->startsAt->format('Y-m-d H:i'));
     }
 
-    public function test_database_holidays_and_recurring_rules_are_reused_without_writing_bookings(): void
+    public function test_config_holidays_and_recurring_rules_are_used_without_database_access_or_bookings(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'database');
-        WorkdaySpecialDate::create(['profile' => 'last_mile', 'date' => '2026-06-29', 'type' => 'holiday', 'title' => 'Stored closure', 'is_active' => true]);
-        WorkdayHolidayRule::create(['profile' => 'last_mile', 'calendar_type' => 'gregorian', 'month' => 6, 'day' => 30, 'title' => 'Annual stored closure', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.last_mile.custom_holidays', ['2026-06-29' => 'Configured closure']);
+        config()->set('workdays.definitions.profiles.last_mile.holidays.gregorian', ['06-30' => 'Annual configured closure']);
         $connection = $this->app['db']->connection();
         $connection->enableQueryLog();
 
@@ -607,21 +607,19 @@ final class DeliverySlotsTest extends TestCase
 
         $this->assertSame('2026-07-01 09:00', $result->slots[0]->startsAt->format('Y-m-d H:i'));
         $this->assertCount(5, $result->slots);
+        $this->assertSame([], $connection->getQueryLog());
         foreach ($connection->getQueryLog() as $query) {
             $this->assertStringStartsWith('select', strtolower(ltrim($query['query'])));
         }
         $connection->disableQueryLog();
-        $this->assertSame(1, WorkdaySpecialDate::count());
-        $this->assertSame(1, WorkdayHolidayRule::count());
     }
 
-    public function test_chain_database_working_day_overrides_config_holiday_and_weekend(): void
+    public function test_config_extra_working_day_overrides_its_holiday_and_weekend(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'chain');
-        config()->set('workdays.profiles.last_mile.custom_holidays', ['2026-07-04' => 'Configured closure']);
-        config()->set('workdays.profiles.last_mile.extra_working_day_hours', [['10:00', '14:00']]);
-        WorkdaySpecialDate::create(['profile' => 'last_mile', 'date' => '2026-07-04', 'type' => 'working_day', 'title' => 'Stored reopening', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.last_mile.custom_holidays', ['2026-07-04' => 'Configured closure']);
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_days', ['2026-07-04' => 'Configured reopening']);
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_day_hours', [['10:00', '14:00']]);
 
         $result = Workday::deliverySlots('2026-07-04T08:00:00Z', $this->slotOptions(['days' => 1]));
 
@@ -630,21 +628,18 @@ final class DeliverySlotsTest extends TestCase
         ], $this->intervals($result));
     }
 
-    public function test_chain_config_extra_working_day_retains_precedence_over_database_holiday(): void
+    public function test_config_extra_working_day_is_unaffected_by_conflicting_database_holiday(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'chain');
-        config()->set('workdays.profiles.last_mile.extra_working_days', ['2026-06-29' => 'Configured reopening']);
-        WorkdaySpecialDate::create(['profile' => 'last_mile', 'date' => '2026-06-29', 'type' => 'holiday', 'title' => 'Stored closure', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.last_mile.extra_working_days', ['2026-06-29' => 'Configured reopening']);
 
         $this->assertCount(5, Workday::deliverySlots('2026-06-29T08:00:00Z', $this->slotOptions(['days' => 1]))->slots);
     }
 
-    public function test_database_queries_are_per_date_and_new_calls_observe_new_holiday_data(): void
+    public function test_dense_config_slots_do_not_query_database_and_new_calls_observe_definition_changes(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'database');
-        config()->set('workdays.profiles.last_mile.working_hours', $this->hours([['09:00', '17:00']]));
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.last_mile.working_hours', $this->hours([['09:00', '17:00']]));
         $options = $this->slotOptions(['duration_minutes' => 60, 'step_minutes' => 5, 'max_slots' => 200]);
         $connection = $this->app['db']->connection();
         $connection->enableQueryLog();
@@ -652,9 +647,9 @@ final class DeliverySlotsTest extends TestCase
         $result = Workday::deliverySlots('2026-06-29T08:00:00Z', $options);
 
         $this->assertCount(170, $result->slots);
-        $this->assertCount(3, $connection->getQueryLog());
+        $this->assertCount(0, $connection->getQueryLog());
         $connection->disableQueryLog();
-        WorkdaySpecialDate::create(['profile' => 'last_mile', 'date' => '2026-06-29', 'type' => 'holiday', 'title' => 'New closure', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.last_mile.custom_holidays', ['2026-06-29' => 'New configured closure']);
 
         $nextResult = Workday::deliverySlots('2026-06-29T08:00:00Z', $options);
 
@@ -665,8 +660,8 @@ final class DeliverySlotsTest extends TestCase
     public function test_one_calculator_is_resolved_and_provider_dates_are_not_evaluated_per_candidate(): void
     {
         $profile = $this->profile($this->hours([['09:00', '17:00']]));
-        config()->set('workdays.profiles.last_mile', $profile);
-        $provider = new class(new ConfigHolidayProvider(['last_mile' => $profile])) implements HolidayProviderInterface
+        config()->set('workdays.definitions.profiles.last_mile', $profile);
+        $provider = new class(new LogicalHolidayProvider(static fn (string $name): array => $profile)) implements HolidayProviderInterface
         {
             public array $dateEvaluations = [];
 
@@ -705,8 +700,8 @@ final class DeliverySlotsTest extends TestCase
         $generator = new DeliverySlotGenerator(function (string $name) use (&$resolved, $profile, $provider): BusinessDayCalculator {
             $resolved[] = $name;
 
-            return new BusinessDayCalculator($name, $profile, maxScanDays: 30, holidayProvider: $provider);
-        });
+            return new BusinessDayCalculator($name, $profile, maxScanDays: 30, holidayProvider: $provider, includeStartDate: false, jalaliCalendar: new JalaliCalendarAdapter, hijriCalendar: new HijriCalendarAdapter('umm_al_qura', 0));
+        }, 30);
 
         $result = $generator->generate('2026-06-29T08:00:00Z', $this->slotOptions(['duration_minutes' => 60, 'step_minutes' => 5, 'max_slots' => 200]));
 
@@ -766,28 +761,23 @@ final class DeliverySlotsTest extends TestCase
     }
 
     #[DataProvider('invalidWindowBoundaries')]
-    public function test_invalid_window_boundary_does_not_remove_other_unambiguous_candidates(string $readyAt, array $window, array $expectedLocal): void
+    public function test_invalid_configured_window_boundary_is_rejected_before_generating_candidates(string $readyAt, array $window, string $reason): void
     {
         $this->everyDay([$window]);
+        $this->expectException(WorkdayConfigurationException::class);
+        $this->expectExceptionMessage($reason);
 
-        $result = Workday::deliverySlots($readyAt, $this->slotOptions(['timezone' => 'America/New_York', 'days' => 1, 'duration_minutes' => 60, 'step_minutes' => 30]));
-
-        $this->assertSame($expectedLocal, $this->intervals($result, 'America/New_York'));
+        // Configured boundaries now share strict validation; only generated bad grid points skip.
+        Workday::deliverySlots($readyAt, $this->slotOptions(['timezone' => 'America/New_York', 'days' => 1, 'duration_minutes' => 60, 'step_minutes' => 30]));
     }
 
     public static function invalidWindowBoundaries(): array
     {
         return [
-            'nonexistent opening keeps later candidates' => ['2026-03-08T00:00:00-05:00', ['02:30', '05:00'], [
-                ['2026-03-08 03:00', '2026-03-08 04:00'], ['2026-03-08 03:30', '2026-03-08 04:30'], ['2026-03-08 04:00', '2026-03-08 05:00'],
-            ]],
-            'ambiguous opening keeps later candidates' => ['2026-11-01T00:00:00-04:00', ['01:30', '04:00'], [
-                ['2026-11-01 02:00', '2026-11-01 03:00'], ['2026-11-01 02:30', '2026-11-01 03:30'], ['2026-11-01 03:00', '2026-11-01 04:00'],
-            ]],
-            'nonexistent close keeps earlier candidates' => ['2026-03-08T00:00:00-05:00', ['00:00', '02:30'], [
-                ['2026-03-08 00:00', '2026-03-08 01:00'], ['2026-03-08 00:30', '2026-03-08 01:30'],
-            ]],
-            'ambiguous close keeps earlier candidates' => ['2026-11-01T00:00:00-04:00', ['00:00', '01:30'], []],
+            'nonexistent opening' => ['2026-03-08T00:00:00-05:00', ['02:30', '05:00'], 'does not exist'],
+            'ambiguous opening' => ['2026-11-01T00:00:00-04:00', ['01:30', '04:00'], 'ambiguous'],
+            'nonexistent close' => ['2026-03-08T00:00:00-05:00', ['00:00', '02:30'], 'does not exist'],
+            'ambiguous close' => ['2026-11-01T00:00:00-04:00', ['00:00', '01:30'], 'ambiguous'],
         ];
     }
 
@@ -847,11 +837,13 @@ final class DeliverySlotsTest extends TestCase
         $this->assertSame(3, $result->requestedDays);
     }
 
-    public function test_midnight_gap_keeps_existing_date_and_unambiguous_later_slots(): void
+    public function test_midnight_gap_derived_overnight_fragment_keeps_unambiguous_later_slots(): void
     {
-        $this->everyDay([['00:00', '03:00']]);
+        config()->set('workdays.definitions.profiles.last_mile.weekends', []);
+        config()->set('workdays.definitions.profiles.last_mile.allow_overnight_working_hours', true);
+        config()->set('workdays.definitions.profiles.last_mile.working_hours', ['Saturday' => [['22:00', '03:00']]]);
 
-        $result = Workday::deliverySlots('2026-09-06T03:30:00Z', $this->slotOptions(['timezone' => 'America/Santiago', 'days' => 2, 'duration_minutes' => 60]));
+        $result = Workday::deliverySlots('2026-09-06T04:00:00Z', $this->slotOptions(['timezone' => 'America/Santiago', 'days' => 1, 'duration_minutes' => 60]));
 
         $this->assertSame([
             ['2026-09-06 01:00', '2026-09-06 02:00'], ['2026-09-06 02:00', '2026-09-06 03:00'],
@@ -860,9 +852,20 @@ final class DeliverySlotsTest extends TestCase
         $this->assertSame(-10800, $result->slots[0]->startsAt->setTimezone('America/Santiago')->getOffset());
     }
 
+    public function test_midnight_gap_does_not_shift_a_valid_daytime_slot_opening(): void
+    {
+        $this->everyDay([['09:00', '17:00']]);
+
+        $result = Workday::deliverySlots('2026-09-06T09:00:00-03:00', $this->slotOptions(['timezone' => 'America/Santiago', 'days' => 1, 'duration_minutes' => 60]));
+
+        $this->assertSame(['2026-09-06 09:00', '2026-09-06 10:00'], $this->intervals($result, 'America/Santiago')[0]);
+        $this->assertSame('2026-09-06T12:00:00.000000+00:00', $this->format($result->slots[0]->startsAt));
+        $this->assertCount(8, $result->slots);
+    }
+
     public function test_phase_two_readiness_completion_can_feed_slots_without_reapplying_cutoff_or_preparation(): void
     {
-        config()->set('workdays.profiles.last_mile.cutoff', ['timezone' => 'Asia/Tehran', 'time' => '10:00']);
+        config()->set('workdays.definitions.profiles.last_mile.cutoff', ['timezone' => 'Asia/Tehran', 'time' => '10:00']);
         $plan = [
             'timezone' => 'Asia/Tehran', 'profile_timezones' => ['warehouse' => 'Asia/Tehran'], 'cutoff_profile' => 'warehouse',
             'stages' => [['id' => 'ready_for_collection', 'type' => 'work', 'profile' => 'warehouse', 'minutes' => 120]],
@@ -938,8 +941,8 @@ final class DeliverySlotsTest extends TestCase
 
     private function everyDay(array $windows): void
     {
-        config()->set('workdays.profiles.last_mile.weekends', []);
-        config()->set('workdays.profiles.last_mile.working_hours', array_fill_keys(range(1, 7), $windows));
+        config()->set('workdays.definitions.profiles.last_mile.weekends', []);
+        config()->set('workdays.definitions.profiles.last_mile.working_hours', array_fill_keys(range(1, 7), $windows));
     }
 
     private function intervals(DeliverySlotsResult $result, string $timezone = 'UTC'): array

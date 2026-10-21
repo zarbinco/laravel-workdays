@@ -9,12 +9,13 @@ use Error;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory;
 use Zarbinco\LaravelWorkdays\Data\ResolvedProfile;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
@@ -26,16 +27,16 @@ final class DynamicProfilesTest extends TestCase
         parent::setUp();
 
         config()->set('app.timezone', 'Pacific/Honolulu');
-        config()->set('workdays.default_profile', 'warehouse_base');
-        config()->set('workdays.storage.driver', 'config');
+        config()->set('workdays.definitions.default_profile', 'warehouse_base');
+        config()->set('workdays.driver', 'config');
         config()->set('workdays.max_scan_days', 31);
-        config()->set('workdays.profiles', [
+        config()->set('workdays.definitions.profiles', [
             'warehouse_base' => $this->baseProfile(),
             'warehouse_tehran' => ['extends' => 'warehouse_base', 'working_hours' => ['Thursday' => [['09:00', '12:00']]], 'cutoff' => ['time' => '13:00']],
             'warehouse_isfahan' => ['extends' => 'warehouse_base'],
             'express_carrier' => $this->baseProfile(),
         ]);
-        config()->set('workdays.profile_routing', $this->routing());
+        config()->set('workdays.definitions.profile_routing', $this->routing());
     }
 
     public function test_child_inherits_calendar_and_monday_but_replaces_thursday_and_cutoff_time(): void
@@ -66,7 +67,7 @@ final class DynamicProfilesTest extends TestCase
             'regional' => ['extends' => 'base', 'custom_holidays' => ['2026-11-03' => 'Region closure'], 'cutoff' => ['time' => '13:00']],
             'warehouse' => ['extends' => 'regional', 'working_hours' => [1 => [['10:00', '16:00']]], 'cutoff' => ['time' => '12:00']],
         ];
-        config()->set('workdays.profiles', $profiles);
+        config()->set('workdays.definitions.profiles', $profiles);
         $calculator = Workday::profile('warehouse');
 
         $this->assertSame([['start' => '10:00', 'end' => '16:00']], $this->windows($calculator, '2026-11-02'));
@@ -74,7 +75,7 @@ final class DynamicProfilesTest extends TestCase
         $this->assertTrue($calculator->isCustomHoliday('2026-11-03'));
         $this->assertTrue($calculator->isGregorianHoliday('2027-01-01'));
         $this->assertSame('12:00', $calculator->resolveCutoff('2026-11-02 11:00')->cutoffAt->format('H:i'));
-        $this->assertSame($profiles, config('workdays.profiles'));
+        $this->assertSame($profiles, config('workdays.definitions.profiles'));
     }
 
     public function test_weekday_alias_override_replaces_the_complete_parent_window_list(): void
@@ -245,7 +246,7 @@ final class DynamicProfilesTest extends TestCase
     #[DataProvider('invalidParents')]
     public function test_invalid_inheritance_parent_values_are_rejected_with_child_context(mixed $parent): void
     {
-        config()->set('workdays.profiles.child', ['extends' => $parent]);
+        config()->set('workdays.definitions.profiles.child', ['extends' => $parent]);
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('child');
 
@@ -260,8 +261,8 @@ final class DynamicProfilesTest extends TestCase
     #[DataProvider('invalidParentDefinitions')]
     public function test_invalid_parent_definitions_are_identified_in_the_hierarchy(mixed $definition): void
     {
-        config()->set('workdays.profiles.bad_parent', $definition);
-        config()->set('workdays.profiles.child', ['extends' => 'bad_parent']);
+        config()->set('workdays.definitions.profiles.bad_parent', $definition);
+        config()->set('workdays.definitions.profiles.child', ['extends' => 'bad_parent']);
 
         try {
             Workday::profile('child');
@@ -280,7 +281,7 @@ final class DynamicProfilesTest extends TestCase
     #[DataProvider('cyclicHierarchies')]
     public function test_cycles_are_rejected_with_the_relevant_profile_chain(array $profiles, array $names): void
     {
-        config()->set('workdays.profiles', $profiles);
+        config()->set('workdays.definitions.profiles', $profiles);
 
         try {
             Workday::profile('child');
@@ -306,7 +307,7 @@ final class DynamicProfilesTest extends TestCase
         foreach (range(1, 16) as $index) {
             $profiles['p'.$index] = ['extends' => 'p'.($index - 1)];
         }
-        config()->set('workdays.profiles', $profiles);
+        config()->set('workdays.definitions.profiles', $profiles);
 
         $this->assertTrue(Workday::profile('p15')->isBusinessDay('2026-11-02'));
         $this->expectException(WorkdayConfigurationException::class);
@@ -342,15 +343,16 @@ final class DynamicProfilesTest extends TestCase
             'allow_overnight_working_hours' => false, 'working_hours' => ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]],
         ]);
 
-        $this->assertSame('2026-11-02 11:01:00', $calculator->addBusinessMinutes($this->at('2026-11-02 09:59:30'), 1)->toDateTimeString());
+        $this->assertSame('2026-11-02 11:00:30', $calculator->addBusinessMinutes($this->at('2026-11-02 09:59:30'), 1)->toDateTimeString());
     }
 
-    public function test_inherited_false_only_flag_preserves_microfix_legacy_precision(): void
+    public function test_inherited_false_only_flag_uses_the_same_exact_precision_as_other_schedules(): void
     {
         $calculator = $this->childCalculator(['allow_overnight_working_hours' => false, 'working_hours' => ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]]], []);
 
-        $this->assertSame('2026-11-02 11:01:00', $calculator->addBusinessMinutes($this->at('2026-11-02 09:59:30'), 1)->toDateTimeString());
-        $this->assertSame(0, $calculator->diffBusinessMinutes($this->at('2026-11-02 09:59:30'), $this->at('2026-11-02 11:00:30')));
+        // Refactor 03 intentionally removes the old partial-minute discard in the child too.
+        $this->assertSame('2026-11-02 11:00:30', $calculator->addBusinessMinutes($this->at('2026-11-02 09:59:30'), 1)->toDateTimeString());
+        $this->assertSame(1, $calculator->diffBusinessMinutes($this->at('2026-11-02 09:59:30'), $this->at('2026-11-02 11:00:30')));
     }
 
     public function test_routing_selects_the_most_specific_rule_even_when_it_appears_last(): void
@@ -362,7 +364,7 @@ final class DynamicProfilesTest extends TestCase
 
     public function test_equal_specificity_uses_configuration_order_and_never_profile_name_sorting(): void
     {
-        config()->set('workdays.profile_routing.rules', [
+        config()->set('workdays.definitions.profile_routing.rules', [
             ['id' => 'first', 'match' => ['kind' => 'warehouse'], 'profile' => 'warehouse_tehran'],
             ['id' => 'second', 'match' => ['kind' => 'warehouse'], 'profile' => 'express_carrier'],
         ]);
@@ -399,15 +401,15 @@ final class DynamicProfilesTest extends TestCase
 
     public function test_empty_rule_list_uses_the_explicit_fallback_instead_of_default_profile(): void
     {
-        config()->set('workdays.default_profile', 'express_carrier');
-        config()->set('workdays.profile_routing', ['fallback_profile' => 'warehouse_isfahan', 'rules' => []]);
+        config()->set('workdays.definitions.default_profile', 'express_carrier');
+        config()->set('workdays.definitions.profile_routing', ['fallback_profile' => 'warehouse_isfahan', 'rules' => []]);
 
         $this->assertSame(['profile' => 'warehouse_isfahan', 'source' => 'fallback', 'rule_id' => null], Workday::resolveProfile([])->toArray());
     }
 
     public function test_nonempty_whitespace_values_are_compared_exactly_without_normalization(): void
     {
-        config()->set('workdays.profile_routing.rules', [['id' => 'space', 'match' => ['custom_identifier' => ' '], 'profile' => 'warehouse_tehran']]);
+        config()->set('workdays.definitions.profile_routing.rules', [['id' => 'space', 'match' => ['custom_identifier' => ' '], 'profile' => 'warehouse_tehran']]);
 
         $this->assertSame('space', Workday::resolveProfile(['custom_identifier' => ' '])->ruleId);
         $this->assertSame('fallback', Workday::resolveProfile(['custom_identifier' => '  '])->source);
@@ -415,7 +417,7 @@ final class DynamicProfilesTest extends TestCase
 
     public function test_wildcard_and_regex_shaped_values_have_no_pattern_matching_behavior(): void
     {
-        config()->set('workdays.profile_routing.rules', [
+        config()->set('workdays.definitions.profile_routing.rules', [
             ['id' => 'star', 'match' => ['region' => '*'], 'profile' => 'warehouse_tehran'],
             ['id' => 'regex', 'match' => ['region' => '/teh.*/'], 'profile' => 'warehouse_tehran'],
         ]);
@@ -428,7 +430,7 @@ final class DynamicProfilesTest extends TestCase
     #[DataProvider('invalidRoutingConfigurations')]
     public function test_invalid_routing_configuration_is_rejected(mixed $routing): void
     {
-        config()->set('workdays.profile_routing', $routing);
+        config()->set('workdays.definitions.profile_routing', $routing);
         $this->expectException(WorkdayConfigurationException::class);
 
         Workday::resolveProfile(['kind' => 'warehouse']);
@@ -457,7 +459,7 @@ final class DynamicProfilesTest extends TestCase
     #[DataProvider('invalidRoutingRules')]
     public function test_invalid_rule_shapes_targets_and_match_values_are_rejected(mixed $rule): void
     {
-        config()->set('workdays.profile_routing.rules', [$rule]);
+        config()->set('workdays.definitions.profile_routing.rules', [$rule]);
         $this->expectException(WorkdayConfigurationException::class);
 
         Workday::resolveProfile(['kind' => 'warehouse']);
@@ -491,7 +493,7 @@ final class DynamicProfilesTest extends TestCase
 
     public function test_duplicate_routing_rule_ids_are_rejected(): void
     {
-        config()->set('workdays.profile_routing.rules', [
+        config()->set('workdays.definitions.profile_routing.rules', [
             ['id' => 'same', 'match' => ['kind' => 'warehouse'], 'profile' => 'warehouse_base'],
             ['id' => 'same', 'match' => ['kind' => 'carrier'], 'profile' => 'express_carrier'],
         ]);
@@ -522,7 +524,7 @@ final class DynamicProfilesTest extends TestCase
     public function test_missing_routing_errors_only_when_the_new_apis_are_explicitly_used(): void
     {
         $config = config('workdays');
-        unset($config['profile_routing']);
+        unset($config['definitions']['profile_routing']);
         config()->set('workdays', $config);
         $this->assertTrue(Workday::isBusinessDay('2026-11-02'));
         $this->expectException(WorkdayConfigurationException::class);
@@ -533,8 +535,8 @@ final class DynamicProfilesTest extends TestCase
 
     public function test_malformed_unrelated_routing_and_profiles_do_not_break_ordinary_apis(): void
     {
-        config()->set('workdays.profile_routing', ['broken' => true]);
-        config()->set('workdays.profiles.unrelated', ['extends' => 'missing']);
+        config()->set('workdays.definitions.profile_routing', ['broken' => true]);
+        config()->set('workdays.definitions.profiles.unrelated', ['extends' => 'missing']);
 
         $this->assertTrue(Workday::profile('warehouse_base')->isBusinessDay('2026-11-02'));
         $this->assertTrue(Workday::profile('warehouse_tehran')->isBusinessTime($this->at('2026-11-02 10:00')));
@@ -567,28 +569,29 @@ final class DynamicProfilesTest extends TestCase
         $this->assertSame($this->windows($calculator, '2026-11-05'), $this->windows($manager->profileFor($context), '2026-11-05'));
     }
 
-    public function test_routing_selection_does_not_construct_holiday_storage_or_query_the_database(): void
+    public function test_config_routing_does_not_query_the_database_and_invalid_sources_cannot_bypass_selection(): void
     {
-        config()->set('workdays.storage.driver', 'database');
         $connection = $this->app['db']->connection();
         $connection->enableQueryLog();
 
         $this->assertSame('warehouse_tehran', Workday::resolveProfile(['kind' => 'warehouse', 'region' => 'tehran'])->profile);
         $this->assertSame([], $connection->getQueryLog());
         $connection->disableQueryLog();
-        config()->set('workdays.storage.driver', 'invalid_storage');
-        $this->assertSame('warehouse_base', Workday::resolveProfile([])->profile);
+        config()->set('workdays.driver', 'invalid_storage');
+        $this->expectException(DefinitionSourceException::class);
+        $this->expectExceptionMessage('workdays.driver');
+        Workday::resolveProfile([]);
     }
 
     public function test_configuration_changes_are_observed_on_new_calls_and_never_mutate_old_calculators(): void
     {
         $old = Workday::profile('warehouse_tehran');
-        config()->set('workdays.profiles.warehouse_base.working_hours.Monday', [['10:00', '12:00']]);
+        config()->set('workdays.definitions.profiles.warehouse_base.working_hours.Monday', [['10:00', '12:00']]);
 
         $this->assertSame([['start' => '09:00', 'end' => '17:00']], $this->windows($old, '2026-11-02'));
         $this->assertSame([['start' => '10:00', 'end' => '12:00']], $this->windows(Workday::profile('warehouse_tehran'), '2026-11-02'));
         $this->assertSame('warehouse_tehran', Workday::resolveProfile(['kind' => 'warehouse', 'region' => 'tehran'])->profile);
-        config()->set('workdays.profile_routing.rules', []);
+        config()->set('workdays.definitions.profile_routing.rules', []);
         $this->assertSame('warehouse_base', Workday::resolveProfile(['kind' => 'warehouse', 'region' => 'tehran'])->profile);
     }
 
@@ -603,33 +606,29 @@ final class DynamicProfilesTest extends TestCase
         $this->assertSame('child', $calculator->explain('2026-11-03')->profile);
     }
 
-    public function test_database_rows_are_selected_by_child_name_without_inheriting_parent_rows(): void
+    public function test_logical_holidays_from_parent_and_child_are_both_inherited_under_child_identity(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'database');
-        WorkdaySpecialDate::create(['profile' => 'warehouse_base', 'date' => '2026-11-02', 'type' => 'holiday', 'title' => 'Parent database only', 'is_active' => true]);
-        WorkdaySpecialDate::create(['profile' => 'warehouse_tehran', 'date' => '2026-11-03', 'type' => 'holiday', 'title' => 'Child database only', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.warehouse_base.custom_holidays', ['2026-11-02' => 'Parent logical holiday']);
+        config()->set('workdays.definitions.profiles.warehouse_tehran.custom_holidays', ['2026-11-03' => 'Child logical holiday']);
+        $child = Workday::profile('warehouse_tehran');
+
+        $this->assertFalse($child->isBusinessDay('2026-11-02'));
+        $this->assertFalse($child->isBusinessDay('2026-11-03'));
+        $this->assertFalse(Workday::profile('warehouse_base')->isBusinessDay('2026-11-02'));
+        $this->assertSame('warehouse_tehran', $child->explain('2026-11-03')->profile);
+        $this->assertSame('Child logical holiday', $child->explain('2026-11-03')->reasons[0]->title);
+        $this->assertSame('Parent logical holiday', $child->explain('2026-11-02')->reasons[0]->title);
+    }
+
+    public function test_child_logical_reopening_overrides_inherited_closure_without_a_mixed_source(): void
+    {
+        config()->set('workdays.definitions.profiles.warehouse_base.custom_holidays', ['2026-11-02' => 'Inherited closure', '2026-11-03' => 'Parent closure']);
+        config()->set('workdays.definitions.profiles.warehouse_tehran.extra_working_days', ['2026-11-02' => 'Child reopening']);
+        config()->set('workdays.definitions.profiles.warehouse_tehran.custom_holidays', ['2026-11-04' => 'Child closure']);
         $child = Workday::profile('warehouse_tehran');
 
         $this->assertTrue($child->isBusinessDay('2026-11-02'));
         $this->assertFalse($child->isBusinessDay('2026-11-03'));
-        $this->assertFalse(Workday::profile('warehouse_base')->isBusinessDay('2026-11-02'));
-        $this->assertSame('warehouse_tehran', $child->explain('2026-11-03')->profile);
-        $this->assertSame('Child database only', $child->explain('2026-11-03')->reasons[0]->title);
-    }
-
-    public function test_chain_combines_inherited_config_and_child_database_overrides_with_existing_precedence(): void
-    {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'chain');
-        config()->set('workdays.profiles.warehouse_base.custom_holidays', ['2026-11-02' => 'Inherited config closure']);
-        WorkdaySpecialDate::create(['profile' => 'warehouse_tehran', 'date' => '2026-11-02', 'type' => 'working_day', 'title' => 'Child reopening', 'is_active' => true]);
-        WorkdaySpecialDate::create(['profile' => 'warehouse_base', 'date' => '2026-11-03', 'type' => 'holiday', 'title' => 'Parent database closure', 'is_active' => true]);
-        WorkdaySpecialDate::create(['profile' => 'warehouse_tehran', 'date' => '2026-11-04', 'type' => 'holiday', 'title' => 'Child closure', 'is_active' => true]);
-        $child = Workday::profile('warehouse_tehran');
-
-        $this->assertTrue($child->isBusinessDay('2026-11-02'));
-        $this->assertTrue($child->isBusinessDay('2026-11-03'));
         $this->assertFalse($child->isBusinessDay('2026-11-04'));
         $this->assertFalse($child->isBusinessDay('2027-01-01'));
         $this->assertTrue($child->explain('2026-11-02')->isExtraWorkingDay);
@@ -675,13 +674,14 @@ final class DynamicProfilesTest extends TestCase
 
         $result = Workday::planDelivery('2026-11-02T09:59:30Z', $this->workPlan('child', 1));
 
-        $this->assertSame('2026-11-02 11:01:00', $result->estimatedCompletionAt->toDateTimeString());
+        $this->assertSame('2026-11-02 11:00:30', $result->estimatedCompletionAt->toDateTimeString());
     }
 
-    public function test_existing_one_argument_planner_constructor_remains_compatible(): void
+    public function test_explicit_planner_dependencies_use_one_context_without_a_constructor_fallback(): void
     {
-        $manager = $this->app->make(WorkdayManager::class);
-        $planner = new DeliveryPlanner(static fn (string $profile): BusinessDayCalculator => $manager->profile($profile));
+        $context = $this->app->make(CalculationContextFactory::class)->open();
+        $planner = new DeliveryPlanner($context->calculator(...), $context->configuration(...), $context->maxScanDays, $context->hasProfile(...));
+        config()->set('workdays.definitions.profiles', []);
 
         $this->assertSame('2026-11-02 11:00:00', $planner->plan('2026-11-02T10:00:00Z', $this->workPlan('warehouse_base', 60))->estimatedCompletionAt->toDateTimeString());
     }
@@ -749,12 +749,14 @@ final class DynamicProfilesTest extends TestCase
 
     private function resolveChild(array $parent, array $child): array
     {
-        return (new ProfileConfigResolver(['parent' => array_replace($this->baseProfile(), $parent), 'child' => array_replace(['extends' => 'parent'], $child)]))->resolve('child');
+        $profiles = ['parent' => array_replace($this->baseProfile(), $parent), 'child' => array_replace(['extends' => 'parent'], $child)];
+
+        return (new ProfileConfigResolver(static fn (string $name): array => $profiles[$name]))->resolve('child');
     }
 
     private function childCalculator(array $parent, array $child): BusinessDayCalculator
     {
-        config()->set('workdays.profiles', ['parent' => array_replace($this->baseProfile(), $parent), 'child' => array_replace(['extends' => 'parent'], $child)]);
+        config()->set('workdays.definitions.profiles', ['parent' => array_replace($this->baseProfile(), $parent), 'child' => array_replace(['extends' => 'parent'], $child)]);
 
         return Workday::profile('child');
     }

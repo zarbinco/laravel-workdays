@@ -19,7 +19,6 @@ use Zarbinco\LaravelWorkdays\Support\CutoffDateTimeNormalizer;
 use Zarbinco\LaravelWorkdays\Support\CutoffPolicy;
 use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
-use Zarbinco\LaravelWorkdays\Support\WorkingHours;
 use Zarbinco\LaravelWorkdays\Support\WorkingTimeBoundary;
 
 /** Validates portable data without looking up current profile configuration. */
@@ -37,16 +36,18 @@ final class DeliveryPromiseCodec
         $unsigned = $payload;
         unset($unsigned['integrity_hash']);
         self::require(hash_equals($payload['integrity_hash'], CalendarFingerprint::integrity($unsigned)), 'Snapshot integrity_hash does not match its payload.');
+        self::runtime($payload['runtime_metadata']);
         self::require(is_int($payload['horizon_days']) && $payload['horizon_days'] >= 1 && $payload['horizon_days'] <= 31, 'Snapshot horizon_days must be an integer from 1 to 31.');
         $received = self::timestamp($payload['received_at'], 'received_at');
         self::require(is_array($payload['plan']), 'Snapshot plan must be an array.');
         $plan = $payload['plan'];
         self::require(is_array($plan['profile_timezones'] ?? null), 'Snapshot plan requires profile_timezones.');
-        $known = array_map('strval', array_keys($plan['profile_timezones']));
         $planner = new DeliveryPlanner(static function (string $profile, int $limit): BusinessDayCalculator {
             throw new InvalidArgumentException('Snapshot structural validation must not construct calculators.');
-        });
-        $planner->validatePlan($plan, $known);
+        }, static function (string $profile): array {
+            throw new InvalidArgumentException('Snapshot structural validation must not resolve live profile metadata.');
+        }, $payload['horizon_days'], static fn (string $profile): bool => array_key_exists($profile, $plan['profile_timezones']));
+        $planner->validatePlan($plan);
         $referenced = [];
         $needsHours = [];
 
@@ -61,7 +62,6 @@ final class DeliveryPromiseCodec
 
         self::require(count($referenced) <= 8, 'Snapshot may reference at most eight profiles.');
         self::require(is_array($payload['calendar_evidence']), 'Snapshot calendar_evidence must be an array.');
-        self::runtime($payload['runtime_metadata']);
         $tzdbMatches = is_string($payload['runtime_metadata']['timezone_database_version'])
             && function_exists('timezone_version_get') && $payload['runtime_metadata']['timezone_database_version'] === timezone_version_get();
         $anchor = self::date($payload['calendar_evidence']['anchor_date'] ?? null, 'calendar_evidence.anchor_date');
@@ -235,13 +235,7 @@ final class DeliveryPromiseCodec
             self::require(abs((int) $rowDate->diffInDays($start->startOfDay(), false)) <= 2 && abs((int) $rowDate->diffInDays($end->startOfDay(), false)) <= 2, 'Snapshot window lies outside its civil-date neighborhood.');
             if ($tzdbMatches) {
                 $zone = new DateTimeZone($definition['timezone']);
-                $nextLabel = WorkingTimeBoundary::labelAfter($date, 1);
-                $dayStart = WorkingTimeBoundary::date($date, $zone);
-                self::require($dayStart !== null, 'Snapshot skipped local date cannot contain a working window.');
-                $lastBoundary = WorkingHours::hasEnhancedConfig($definition['config'])
-                    ? CarbonImmutable::instance(DateTimeImmutable::createFromFormat('!Y-m-d', $nextLabel, $zone))
-                    : $dayStart->setTimezone('UTC')->addSeconds(86400);
-                self::require($start->greaterThanOrEqualTo($dayStart) && $start->lessThan($lastBoundary) && $end->lessThanOrEqualTo($lastBoundary), 'Snapshot window exceeds its effective profile-date interval.');
+                self::containedInDate($profile, $date, $zone, $start, $end);
             }
             $previousEnd = $end;
         }
@@ -251,11 +245,38 @@ final class DeliveryPromiseCodec
         }
     }
 
+    /** Validate real positive extent, without demanding a hypothetical scheduled midnight. */
+    private static function containedInDate(string $profile, string $date, DateTimeZone $zone, CarbonImmutable $start, CarbonImmutable $end): void
+    {
+        self::require(WorkingTimeBoundary::date($date, $zone) !== null, 'Snapshot skipped local date cannot contain a working window.');
+        WorkingTimeBoundary::assertRepresentableDate($profile, $date, $zone);
+        $cursor = $start;
+        $boundaries = [];
+        // Include a transition in the endpoint's second when its fractional part is positive.
+        foreach ($zone->getTransitions($start->getTimestamp(), $end->getTimestamp() + 1) ?: [] as $transition) {
+            $boundary = CarbonImmutable::createFromTimestamp($transition['ts'], 'UTC');
+            if ($boundary->greaterThan($start) && $boundary->lessThan($end)) {
+                $boundaries[] = $boundary;
+            }
+        }
+        $boundaries[] = $end;
+        foreach ($boundaries as $boundary) {
+            // Within one constant offset, local labels are monotone. Both included ends
+            // prove containment of the whole segment; the exclusive endpoint may change date.
+            self::require($cursor->setTimezone($zone)->toDateString() === $date
+                && $boundary->subMicrosecond()->setTimezone($zone)->toDateString() === $date,
+                'Snapshot window exceeds its effective profile-date interval.');
+            $cursor = $boundary;
+        }
+    }
+
     private static function runtime(mixed $runtime): void
     {
         self::require(is_array($runtime), 'Snapshot runtime_metadata must be an array.');
         self::keys($runtime, ['calculation_schema_version', 'php_version', 'carbon_version', 'verta_version', 'islamic_calendar_version', 'timezone_database_version'], 'runtime_metadata');
-        self::require($runtime['calculation_schema_version'] === 1 && is_string($runtime['php_version']) && $runtime['php_version'] !== '', 'Snapshot runtime schema or PHP version is invalid.');
+        self::require($runtime['calculation_schema_version'] !== 1, 'Snapshot uses unsupported old calculation semantics [1]; regenerate it deliberately from its original inputs.');
+        self::require($runtime['calculation_schema_version'] === CalculationSemantics::CURRENT, 'Snapshot calculation semantics are unsupported; only the current strict integer version ['.CalculationSemantics::CURRENT.'] is accepted.');
+        self::require(is_string($runtime['php_version']) && $runtime['php_version'] !== '', 'Snapshot runtime PHP version is invalid.');
 
         foreach (['carbon_version', 'verta_version', 'islamic_calendar_version', 'timezone_database_version'] as $field) {
             self::require($runtime[$field] === null || (is_string($runtime[$field]) && $runtime[$field] !== ''), 'Snapshot runtime versions must be non-empty strings or null.');
@@ -350,7 +371,7 @@ final class DeliveryPromiseCodec
             $zone = new DateTimeZone(sprintf('%s%02d:%02d:%02d', $offset < 0 ? '-' : '+', intdiv($seconds, 3600), intdiv($seconds % 3600, 60), $seconds % 60));
             $effective = $planningStart->setTimezone($zone);
         } else {
-            // The legacy date-only field does not encode a historical midnight offset.
+            // The date-only field does not encode a historical midnight offset.
             $effective = CarbonImmutable::instance(DateTimeImmutable::createFromFormat('!Y-m-d', $value['effective_business_date'], $cutoffReceived->getTimezone()));
         }
 

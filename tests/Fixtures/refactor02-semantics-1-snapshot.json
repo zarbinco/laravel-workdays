@@ -1,0 +1,174 @@
+{
+    "schema_version": 1,
+    "calendar_version": "5999f79c8399847fe4e93e24ab92daee4295b5ceec0bc99d42ddcacd09f839a9",
+    "received_at": "2026-11-02T09:59:30.123456+00:00",
+    "plan": {
+        "profile_timezones": {
+            "warehouse": "UTC"
+        },
+        "stages": [
+            {
+                "id": "prepare",
+                "minutes": 1,
+                "profile": "warehouse",
+                "type": "work"
+            }
+        ],
+        "timezone": "UTC"
+    },
+    "horizon_days": 1,
+    "original_result": {
+        "timezone": "UTC",
+        "received_at": "2026-11-02T09:59:30.123456+00:00",
+        "planning_start_at": "2026-11-02T09:59:30.123456+00:00",
+        "cutoff_result": null,
+        "stages": [
+            {
+                "id": "prepare",
+                "type": "work",
+                "profiles": [
+                    "warehouse"
+                ],
+                "ready_at": "2026-11-02T09:59:30.123456+00:00",
+                "started_at": "2026-11-02T09:59:30.123456+00:00",
+                "completed_at": "2026-11-02T11:01:00.000000+00:00"
+            }
+        ],
+        "estimated_completion_at": "2026-11-02T11:01:00.000000+00:00"
+    },
+    "calendar_evidence": {
+        "anchor_date": "2026-11-02",
+        "hijri": {
+            "adjustment": 0,
+            "method": "mathematical"
+        },
+        "horizon_days": 1,
+        "plan_timezone": "UTC",
+        "profiles": {
+            "warehouse": {
+                "config": {
+                    "weekends": [],
+                    "working_hours": {
+                        "1": [
+                            [
+                                "09:00",
+                                "10:00"
+                            ],
+                            [
+                                "11:00",
+                                "12:00"
+                            ]
+                        ]
+                    }
+                },
+                "coverage": {
+                    "from": "2026-10-31",
+                    "provider_from": "2026-10-30",
+                    "through": "2026-11-06"
+                },
+                "days": [
+                    {
+                        "date": "2026-10-31",
+                        "effective_working_windows": [],
+                        "exists": true,
+                        "holiday_reasons": [],
+                        "is_business_day": true,
+                        "is_extra_working_day": false,
+                        "is_holiday": false,
+                        "profile": "warehouse"
+                    },
+                    {
+                        "date": "2026-11-01",
+                        "effective_working_windows": [],
+                        "exists": true,
+                        "holiday_reasons": [],
+                        "is_business_day": true,
+                        "is_extra_working_day": false,
+                        "is_holiday": false,
+                        "profile": "warehouse"
+                    },
+                    {
+                        "date": "2026-11-02",
+                        "effective_working_windows": [
+                            {
+                                "end": "2026-11-02T10:00:00.000000+00:00",
+                                "start": "2026-11-02T09:00:00.000000+00:00"
+                            },
+                            {
+                                "end": "2026-11-02T12:00:00.000000+00:00",
+                                "start": "2026-11-02T11:00:00.000000+00:00"
+                            }
+                        ],
+                        "exists": true,
+                        "holiday_reasons": [],
+                        "is_business_day": true,
+                        "is_extra_working_day": false,
+                        "is_holiday": false,
+                        "profile": "warehouse"
+                    },
+                    {
+                        "date": "2026-11-03",
+                        "effective_working_windows": [],
+                        "exists": true,
+                        "holiday_reasons": [],
+                        "is_business_day": true,
+                        "is_extra_working_day": false,
+                        "is_holiday": false,
+                        "profile": "warehouse"
+                    },
+                    {
+                        "date": "2026-11-04",
+                        "effective_working_windows": [],
+                        "exists": true,
+                        "holiday_reasons": [],
+                        "is_business_day": true,
+                        "is_extra_working_day": false,
+                        "is_holiday": false,
+                        "profile": "warehouse"
+                    },
+                    {
+                        "date": "2026-11-05",
+                        "effective_working_windows": [],
+                        "exists": true,
+                        "holiday_reasons": [],
+                        "is_business_day": true,
+                        "is_extra_working_day": false,
+                        "is_holiday": false,
+                        "profile": "warehouse"
+                    },
+                    {
+                        "date": "2026-11-06",
+                        "effective_working_windows": [],
+                        "exists": true,
+                        "holiday_reasons": [],
+                        "is_business_day": true,
+                        "is_extra_working_day": false,
+                        "is_holiday": false,
+                        "profile": "warehouse"
+                    }
+                ],
+                "holiday_inputs": {
+                    "custom": [],
+                    "extra": [],
+                    "recurring": {
+                        "gregorian": [],
+                        "hijri": [],
+                        "jalali": []
+                    }
+                },
+                "needs_working_hours": true,
+                "timezone": "UTC"
+            }
+        },
+        "schema_version": 1
+    },
+    "runtime_metadata": {
+        "calculation_schema_version": 1,
+        "carbon_version": "3.13.0",
+        "islamic_calendar_version": "1.21",
+        "php_version": "8.3.30",
+        "timezone_database_version": "2025.2",
+        "verta_version": "v9.0"
+    },
+    "integrity_hash": "45dce026ad2efdfc83910ab5a76368eda1309062e2a19d5616ebc5e4cdc0b6b6"
+}

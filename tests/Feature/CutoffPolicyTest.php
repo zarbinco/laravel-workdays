@@ -12,12 +12,13 @@ use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
+use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\Holiday;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
 
@@ -27,11 +28,11 @@ final class CutoffPolicyTest extends TestCase
     {
         parent::setUp();
 
-        config()->set('workdays.default_profile', 'warehouse');
-        config()->set('workdays.storage.driver', 'config');
-        config()->set('workdays.include_start_date', false);
+        config()->set('workdays.definitions.default_profile', 'warehouse');
+        config()->set('workdays.driver', 'config');
+        config()->set('workdays.definitions.include_start_date', false);
         config()->set('workdays.max_scan_days', 14);
-        config()->set('workdays.profiles', ['warehouse' => $this->warehouseConfig()]);
+        config()->set('workdays.definitions.profiles', ['warehouse' => $this->warehouseConfig()]);
     }
 
     #[DataProvider('acceptanceCases')]
@@ -92,7 +93,7 @@ final class CutoffPolicyTest extends TestCase
 
     public function test_profiles_have_isolated_cutoff_policies(): void
     {
-        config()->set('workdays.profiles.retail', array_replace($this->warehouseConfig(), [
+        config()->set('workdays.definitions.profiles.retail', array_replace($this->warehouseConfig(), [
             'cutoff' => ['timezone' => 'Asia/Tehran', 'time' => '12:00'],
         ]));
 
@@ -298,9 +299,9 @@ final class CutoffPolicyTest extends TestCase
     public function test_include_start_date_cannot_change_current_or_strictly_later_assignment(): void
     {
         foreach (['2026-06-29 10:00', '2026-06-30 14:00'] as $receivedAt) {
-            config()->set('workdays.include_start_date', false);
+            config()->set('workdays.definitions.include_start_date', false);
             $excludingStart = Workday::resolveCutoff($receivedAt)->toArray();
-            config()->set('workdays.include_start_date', true);
+            config()->set('workdays.definitions.include_start_date', true);
 
             $this->assertSame($excludingStart, Workday::resolveCutoff($receivedAt)->toArray());
         }
@@ -309,7 +310,7 @@ final class CutoffPolicyTest extends TestCase
     public function test_selected_provider_is_reused_and_date_exactly_at_scan_limit_succeeds(): void
     {
         $provider = new CutoffRecordingHolidayProvider('2026-07-01');
-        $calculator = new BusinessDayCalculator('warehouse', $this->plainProfileConfig(), maxScanDays: 2, holidayProvider: $provider);
+        $calculator = new BusinessDayCalculator('warehouse', $this->plainProfileConfig(), maxScanDays: 2, holidayProvider: $provider, includeStartDate: false, jalaliCalendar: new JalaliCalendarAdapter, hijriCalendar: new HijriCalendarAdapter('umm_al_qura', 0));
 
         $result = $calculator->resolveCutoff('2026-06-29 10:00');
 
@@ -321,7 +322,7 @@ final class CutoffPolicyTest extends TestCase
     public function test_scan_limit_one_examines_tomorrow_but_never_the_following_date(): void
     {
         $provider = new CutoffRecordingHolidayProvider('2026-07-01');
-        $calculator = new BusinessDayCalculator('warehouse', $this->plainProfileConfig(), maxScanDays: 1, holidayProvider: $provider);
+        $calculator = new BusinessDayCalculator('warehouse', $this->plainProfileConfig(), maxScanDays: 1, holidayProvider: $provider, includeStartDate: false, jalaliCalendar: new JalaliCalendarAdapter, hijriCalendar: new HijriCalendarAdapter('umm_al_qura', 0));
 
         try {
             $calculator->resolveCutoff('2026-06-29 10:00');
@@ -361,7 +362,7 @@ final class CutoffPolicyTest extends TestCase
     {
         $profile = $this->warehouseConfig();
         unset($profile['cutoff']);
-        config()->set('workdays.profiles.warehouse', $profile);
+        config()->set('workdays.definitions.profiles.warehouse', $profile);
         $this->assertTrue(Workday::isBusinessDay('2026-06-29'));
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('warehouse');
@@ -425,7 +426,7 @@ final class CutoffPolicyTest extends TestCase
         } else {
             unset($profile['cutoff']);
         }
-        config()->set('workdays.profiles.warehouse', $profile);
+        config()->set('workdays.definitions.profiles.warehouse', $profile);
 
         $calculator = Workday::profile('warehouse');
 
@@ -616,7 +617,7 @@ final class CutoffPolicyTest extends TestCase
         $profile = array_replace($this->plainProfileConfig(), [
             'cutoff' => ['timezone' => 'Pacific/Apia', 'time' => '14:00'],
         ]);
-        $calculator = new BusinessDayCalculator('warehouse', $profile, maxScanDays: 1, holidayProvider: $provider);
+        $calculator = new BusinessDayCalculator('warehouse', $profile, maxScanDays: 1, holidayProvider: $provider, includeStartDate: false, jalaliCalendar: new JalaliCalendarAdapter, hijriCalendar: new HijriCalendarAdapter('umm_al_qura', 0));
 
         try {
             $calculator->resolveCutoff('2011-12-29 14:00');
@@ -660,17 +661,9 @@ final class CutoffPolicyTest extends TestCase
         Workday::resolveCutoff('2026-03-08 02:30');
     }
 
-    public function test_database_stored_holiday_affects_cutoff_assignment(): void
+    public function test_source_defined_holiday_affects_cutoff_assignment(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'database');
-        WorkdaySpecialDate::create([
-            'profile' => 'warehouse',
-            'date' => '2026-06-29',
-            'type' => 'holiday',
-            'title' => 'Stored warehouse closure',
-            'is_active' => true,
-        ]);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays.2026-06-29', 'Warehouse closure');
 
         $result = Workday::resolveCutoff('2026-06-29 10:00');
 
@@ -678,18 +671,10 @@ final class CutoffPolicyTest extends TestCase
         $this->assertSame('2026-06-30', $result->effectiveBusinessDate->toDateString());
     }
 
-    public function test_chain_database_extra_working_day_preserves_config_holiday_override_precedence(): void
+    public function test_single_source_extra_working_day_preserves_holiday_override_precedence(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'chain');
         $this->setProfile(['custom_holidays' => ['2026-06-29' => 'Config closure']]);
-        WorkdaySpecialDate::create([
-            'profile' => 'warehouse',
-            'date' => '2026-06-29',
-            'type' => 'working_day',
-            'title' => 'Database reopening',
-            'is_active' => true,
-        ]);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days.2026-06-29', 'Source reopening');
 
         $result = Workday::resolveCutoff('2026-06-29 10:00');
 
@@ -725,7 +710,7 @@ final class CutoffPolicyTest extends TestCase
 
     private function setProfile(array $overrides): void
     {
-        config()->set('workdays.profiles.warehouse', array_replace($this->warehouseConfig(), $overrides));
+        config()->set('workdays.definitions.profiles.warehouse', array_replace($this->warehouseConfig(), $overrides));
     }
 
     private function setPolicy(array $policy): void

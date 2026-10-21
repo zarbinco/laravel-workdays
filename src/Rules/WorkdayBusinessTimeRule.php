@@ -7,6 +7,7 @@ namespace Zarbinco\LaravelWorkdays\Rules;
 use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Rules\Concerns\ParsesRuleDates;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
@@ -41,6 +42,8 @@ final class WorkdayBusinessTimeRule implements ValidationRule
 
         try {
             $result = $this->target()->isBusinessTime($datetime);
+        } catch (DefinitionSourceException $exception) {
+            throw $exception;
         } catch (WorkdayConfigurationException) {
             $fail($this->messageText('The :attribute could not be validated because working hours are not configured.', $attribute));
 

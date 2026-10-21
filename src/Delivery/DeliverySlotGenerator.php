@@ -17,6 +17,7 @@ use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Support\CutoffDateTimeNormalizer;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
+use Zarbinco\LaravelWorkdays\Support\WorkingTimeBoundary;
 
 final readonly class DeliverySlotGenerator
 {
@@ -25,7 +26,7 @@ final readonly class DeliverySlotGenerator
     /**
      * @param  callable(string): BusinessDayCalculator  $resolveCalculator
      */
-    public function __construct(callable $resolveCalculator, private ?array $scanSettings = null)
+    public function __construct(callable $resolveCalculator, private int $maxScanDays)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
     }
@@ -86,13 +87,13 @@ final readonly class DeliverySlotGenerator
 
                 // Integer wall-minute steps keep each window's grid independent of readiness.
                 for ($minute = $window->startMinutes(); $minute <= $lastStart; $minute += $options['step_minutes']) {
-                    $start = $this->boundary($label, $minute, $zone, $transitions);
+                    $start = WorkingTimeBoundary::candidateAt($profile, $label, $minute, $zone)?->setTimezone('UTC');
 
                     if ($start === null || $start->lessThan($eligibleFromAt)) {
                         continue;
                     }
 
-                    $end = $this->boundary($label, $minute + $options['duration_minutes'], $zone, $transitions);
+                    $end = WorkingTimeBoundary::candidateAt($profile, $label, $minute + $options['duration_minutes'], $zone)?->setTimezone('UTC');
 
                     if ($end === null
                         || $end->getTimestamp() - $start->getTimestamp() !== $options['duration_minutes'] * 60
@@ -151,29 +152,6 @@ final readonly class DeliverySlotGenerator
         }
 
         return CarbonImmutable::instance($eligible)->setTimezone('UTC');
-    }
-
-    /**
-     * @param  array<int, array{ts: int, offset: int, time: string, isdst: bool, abbr: string}>  $transitions
-     */
-    private function boundary(string $date, int $minute, DateTimeZone $zone, array $transitions): ?CarbonImmutable
-    {
-        if ($minute === 1440) {
-            // An effective 24:00 closing boundary occupies no positive time on the next date.
-            $date = CarbonImmutable::createFromFormat('!Y-m-d', $date, 'UTC')->addDay()->toDateString();
-            $minute = 0;
-        }
-
-        $wallTime = sprintf('%s %02d:%02d:00.000000', $date, intdiv($minute, 60), $minute % 60);
-        $parsed = DateTimeImmutable::createFromFormat('!Y-m-d H:i:s.u', $wallTime, $zone);
-
-        if ($parsed === false || $parsed->format('Y-m-d H:i:s.u') !== $wallTime) {
-            return null;
-        }
-
-        $local = CarbonImmutable::instance($parsed);
-
-        return $this->isAmbiguous($local, $transitions) ? null : $local->setTimezone('UTC');
     }
 
     /**
@@ -256,7 +234,7 @@ final readonly class DeliverySlotGenerator
         }
 
         try {
-            $limit = ProfileConfigValidator::validateMaxScanDays($this->scanSettings === null ? config('workdays.max_scan_days', 3660) : $this->scanSettings['max_scan_days']);
+            $limit = ProfileConfigValidator::validateMaxScanDays($this->maxScanDays);
         } catch (InvalidArgumentException $exception) {
             throw new WorkdayConfigurationException('Invalid delivery-slot max_scan_days: '.$exception->getMessage(), previous: $exception);
         }

@@ -36,8 +36,8 @@ final readonly class EffectiveWorkingHours
             throw new WorkdayConfigurationException(sprintf('The allow_overnight_working_hours config for profile [%s] must be a boolean.', $profile));
         }
 
-        $weekly = array_key_exists('working_hours', $config) ? WorkingHours::normalizeWorkingHours($profile, $config['working_hours'], $overnight, true) : [];
-        $fallback = array_key_exists('extra_working_day_hours', $config) ? WorkingHours::normalizeWindows($profile, 'extra_working_day_hours', $config['extra_working_day_hours'], $overnight, true) : [];
+        $weekly = array_key_exists('working_hours', $config) ? WorkingHours::normalizeWorkingHours($profile, $config['working_hours'], $overnight) : [];
+        $fallback = array_key_exists('extra_working_day_hours', $config) ? WorkingHours::normalizeWindows($profile, 'extra_working_day_hours', $config['extra_working_day_hours'], $overnight) : [];
         $special = [];
         $definitions = $config['special_working_hours'] ?? [];
 
@@ -47,7 +47,7 @@ final readonly class EffectiveWorkingHours
 
         foreach ($definitions as $label => $windows) {
             self::validateDate($profile, 'special_working_hours', $label);
-            $special[$label] = WorkingHours::normalizeWindows($profile, 'special_working_hours.'.$label, $windows, $overnight, true);
+            $special[$label] = WorkingHours::normalizeWindows($profile, 'special_working_hours.'.$label, $windows, $overnight);
         }
 
         $definitions = $config['seasonal_working_hours'] ?? [];
@@ -75,7 +75,7 @@ final readonly class EffectiveWorkingHours
             }
 
             try {
-                $weekdays = WorkingHours::normalizeWorkingHours($profile, $season['weekdays'], $overnight, true);
+                $weekdays = WorkingHours::normalizeWorkingHours($profile, $season['weekdays'], $overnight);
             } catch (WorkdayConfigurationException $exception) {
                 throw new WorkdayConfigurationException(sprintf('Invalid %s weekdays for profile [%s]: %s', $section, $profile, $exception->getMessage()), previous: $exception);
             }
@@ -115,15 +115,20 @@ final readonly class EffectiveWorkingHours
         }
 
         if ($this->overnight) {
-            $previous = WorkingTimeBoundary::date(WorkingTimeBoundary::labelAfter($label, -1), $zone);
+            // Only syntax selection may inspect a label outside the finite instant range.
+            // Ordinary daytime windows require no previous-date boundary or calendar query.
+            $previousLabel = CarbonImmutable::createFromFormat('!Y-m-d', $label, 'UTC')->subDay();
+            if ($this->mayCarryFrom($previousLabel)) {
+                $previous = WorkingTimeBoundary::date($previousLabel->toDateString(), $zone);
 
-            if ($previous !== null) {
-                foreach ($this->startingWindows($previous, $isBusinessDate, $isExtraWorkingDay) as $window) {
-                    if ($window->endMinutes() < $window->startMinutes()) {
-                        $this->validateShift($previous->toDateString(), $window, $zone);
+                if ($previous !== null) {
+                    foreach ($this->startingWindows($previous, $isBusinessDate, $isExtraWorkingDay) as $window) {
+                        if ($window->endMinutes() < $window->startMinutes()) {
+                            $this->validateShift($previous->toDateString(), $window, $zone);
 
-                        if ($window->endMinutes() > 0) {
-                            $fragments[] = new TimeWindow('00:00', $window->end);
+                            if ($window->endMinutes() > 0) {
+                                $fragments[] = new TimeWindow('00:00', $window->end);
+                            }
                         }
                     }
                 }
@@ -191,6 +196,29 @@ final readonly class EffectiveWorkingHours
         WorkingTimeBoundary::at($this->profile, $label, $window->startMinutes(), $zone);
         $endLabel = $window->endMinutes() < $window->startMinutes() ? WorkingTimeBoundary::labelAfter($label, 1) : $label;
         WorkingTimeBoundary::at($this->profile, $endLabel, $window->endMinutes(), $zone);
+    }
+
+    /** Check actual originating syntax before querying an unrelated previous calendar date. */
+    private function mayCarryFrom(CarbonImmutable $date): bool
+    {
+        $windows = $this->special[$date->toDateString()] ?? null;
+        if ($windows === null) {
+            foreach ($this->seasons as $season) {
+                if ($date->toDateString() >= $season['from'] && $date->toDateString() <= $season['through']
+                    && array_key_exists($date->isoWeekday(), $season['weekdays'])) {
+                    $windows = $season['weekdays'][$date->isoWeekday()];
+                    break;
+                }
+            }
+        }
+        $windows ??= ($this->weekly[$date->isoWeekday()] ?? []) ?: $this->fallback;
+        foreach ($windows as $window) {
+            if ($window->endMinutes() < $window->startMinutes()) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static function validateDate(string $profile, string $section, mixed $label): void

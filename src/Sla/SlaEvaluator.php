@@ -6,7 +6,6 @@ namespace Zarbinco\LaravelWorkdays\Sla;
 
 use Carbon\CarbonImmutable;
 use Closure;
-use DateTimeImmutable;
 use DateTimeInterface;
 use DateTimeZone;
 use InvalidArgumentException;
@@ -16,27 +15,27 @@ use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Data\SlaResult;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Support\CutoffDateTimeNormalizer;
-use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
+use Zarbinco\LaravelWorkdays\Support\WorkingTime;
 use Zarbinco\LaravelWorkdays\Support\WorkingTimeBoundary;
 
-/** Exact interval accounting, isolated from legacy whole-minute duration methods. */
+/** Shared working intervals with SLA-specific pause subtraction and status policy. */
 final readonly class SlaEvaluator
 {
     private const MINUTE = 60000000;
 
     private Closure $resolveCalculator;
 
-    private ?Closure $resolveProfileConfig;
+    private Closure $resolveProfileConfig;
 
     /**
      * @param  callable(string, int): BusinessDayCalculator  $resolveCalculator
-     * @param  null|callable(string): array<string, mixed>  $resolveProfileConfig
+     * @param  callable(string): array<string, mixed>  $resolveProfileConfig
      */
-    public function __construct(callable $resolveCalculator, ?callable $resolveProfileConfig = null, private ?array $scanSettings = null)
+    public function __construct(callable $resolveCalculator, callable $resolveProfileConfig, private int $maxScanDays)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
-        $this->resolveProfileConfig = $resolveProfileConfig === null ? null : Closure::fromCallable($resolveProfileConfig);
+        $this->resolveProfileConfig = Closure::fromCallable($resolveProfileConfig);
     }
 
     /** @param array<string, mixed> $options */
@@ -58,7 +57,7 @@ final readonly class SlaEvaluator
         [$pauses, $paused] = $this->pauses($options['pauses'] ?? [], $timezone, $start, $evaluation);
 
         try {
-            $limit = ProfileConfigValidator::validateMaxScanDays($this->scanSettings === null ? config('workdays.max_scan_days', 3660) : $this->scanSettings['max_scan_days']);
+            $limit = ProfileConfigValidator::validateMaxScanDays($this->maxScanDays);
             $calculator = ($this->resolveCalculator)($profile, $limit);
             $effective = $this->profileConfig($profile);
 
@@ -71,6 +70,7 @@ final readonly class SlaEvaluator
 
         $zone = new DateTimeZone($timezone);
         $anchor = $startedAt->setTimezone($zone)->toDateString();
+        $evaluationDate = $evaluatedAt->setTimezone($zone)->toDateString();
 
         try {
             $lastDate = WorkingTimeBoundary::labelAfter($anchor, $limit);
@@ -78,17 +78,16 @@ final readonly class SlaEvaluator
             throw $this->failure($profile, $limit, 'The configured date horizon cannot be represented.', $exception);
         }
 
-        if ($evaluatedAt->setTimezone($zone)->toDateString() > $lastDate) {
+        if ($evaluationDate > $lastDate) {
             throw $this->failure($profile, $limit, 'evaluatedAt lies beyond the last permitted local date ['.$lastDate.'].');
         }
 
-        $target = $targetMinutes * self::MINUTE;
+        $target = WorkingTime::minutes($targetMinutes);
         $consumed = 0;
         $pausedTime = 0;
         $eligible = 0;
         $due = null;
         $pauseIndex = 0;
-        $pending = [];
 
         // Each callback sees disjoint chronological working fragments, not rounded minutes.
         $active = static function (int $from, int $through) use (&$consumed, &$eligible, &$due, $evaluation, $target): void {
@@ -155,38 +154,17 @@ final readonly class SlaEvaluator
                 continue; // Date-label budget is not extended by a skipped civil date.
             }
 
-            $nextLabel = WorkingTimeBoundary::labelAfter($label, 1);
-            $watermark = self::micros($this->earliestBoundary($nextLabel, $zone));
-
-            foreach ($calculator->workingWindowsFor($date) as $window) {
-                $from = WorkingTimeBoundary::at($profile, $label, $window->startMinutes(), $zone, $window->startMinutes() === 0);
-                $through = WorkingTimeBoundary::at($profile, $label, $window->endMinutes(), $zone, $window->endMinutes() === 1440);
+            foreach ($calculator->workingIntervalsFor($date) as [$from, $through]) {
                 $from = max($start, self::micros($from));
                 $through = self::micros($through);
 
                 if ($through > $from) {
-                    $pending[] = [$from, $through];
+                    $account($from, $through);
                 }
             }
 
-            // Merge spill/overlap across date rows before committing anything past midnight.
-            $pending = self::union($pending);
-            $tail = [];
-
-            foreach ($pending as [$from, $through]) {
-                $end = min($through, $watermark);
-
-                if ($end > $from) {
-                    $account($from, $end);
-                }
-
-                if ($through > $watermark) {
-                    $tail[] = [max($from, $watermark), $through];
-                }
-            }
-
-            $pending = $tail;
-            $finished = $watermark >= $evaluation && ($due !== null || $paused);
+            // Shared daily intervals are already disjoint and clipped to their owning date.
+            $finished = $label >= $evaluationDate && ($due !== null || $paused);
 
             if ($finished) {
                 break;
@@ -317,79 +295,24 @@ final readonly class SlaEvaluator
         return $local->setTimezone('UTC');
     }
 
-    /** Conservative watermark: no next-row window can begin before this native date boundary. */
-    private function earliestBoundary(string $label, DateTimeZone $zone): CarbonImmutable
-    {
-        $native = DateTimeImmutable::createFromFormat('!Y-m-d', $label, $zone);
-
-        if ($native === false) {
-            throw new RuntimeException('SLA calendar date boundary cannot be represented.');
-        }
-
-        $earliest = CarbonImmutable::instance($native)->setTimezone('UTC');
-        $wall = $native->getTimestamp() + $native->getOffset();
-        $transitions = $zone->getTransitions($native->getTimestamp() - 172800, $native->getTimestamp() + 172800) ?: [];
-
-        foreach (array_unique(array_column($transitions, 'offset')) as $offset) {
-            $alternative = CarbonImmutable::createFromTimestamp($wall - $offset, 'UTC');
-
-            if ($alternative->lessThan($earliest) && $alternative->setTimezone($zone)->format('Y-m-d H:i:s.u') === $native->format('Y-m-d H:i:s.u')) {
-                $earliest = $alternative;
-            }
-        }
-
-        return $earliest;
-    }
-
     private function profileConfig(string $profile): array
     {
-        if ($this->resolveProfileConfig !== null) {
-            return ($this->resolveProfileConfig)($profile);
-        }
-
-        $profiles = config('workdays.profiles', []);
-
-        if (! is_array($profiles) || ! array_key_exists($profile, $profiles)) {
-            throw new WorkdayConfigurationException(sprintf('SLA profile [%s] is not configured.', $profile));
-        }
-
-        return is_array($profiles[$profile]) && array_key_exists('extends', $profiles[$profile])
-            ? (new ProfileConfigResolver($profiles))->resolve($profile)
-            : ProfileConfigValidator::validate($profile, $profiles[$profile]);
+        return ($this->resolveProfileConfig)($profile);
     }
 
     private static function micros(CarbonImmutable $instant): int
     {
-        $seconds = $instant->getTimestamp();
-        $bound = intdiv(PHP_INT_MAX, 1000000) - 1;
-
-        if ($seconds < -$bound || $seconds > $bound) {
-            throw new InvalidArgumentException('SLA timestamp exceeds the safe 64-bit microsecond range.');
-        }
-
-        return $seconds * 1000000 + (int) $instant->format('u');
+        return WorkingTime::micros($instant);
     }
 
     private static function fromMicros(int $value): CarbonImmutable
     {
-        $seconds = intdiv($value, 1000000);
-        $microseconds = $value % 1000000;
-
-        if ($microseconds < 0) {
-            $seconds--;
-            $microseconds += 1000000;
-        }
-
-        return CarbonImmutable::createFromTimestamp($seconds, 'UTC')->setMicrosecond($microseconds);
+        return WorkingTime::fromMicros($value);
     }
 
     private static function duration(int $from, int $through): int
     {
-        if ($from < 0 && $through > PHP_INT_MAX + $from) {
-            throw new RuntimeException('SLA duration exceeds safe 64-bit microsecond arithmetic.');
-        }
-
-        return $through - $from;
+        return WorkingTime::elapsed($from, $through);
     }
 
     private static function sum(int $total, int $duration): int

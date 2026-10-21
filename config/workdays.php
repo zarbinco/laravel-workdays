@@ -2,86 +2,71 @@
 
 declare(strict_types=1);
 
+// Select one complete operational source; connection settings are bootstrap only.
 return [
-    'default_profile' => 'iran',
-
-    'include_start_date' => false,
-
+    'driver' => env('WORKDAYS_DRIVER', 'config'),
+    'database' => [
+        'connection' => env('WORKDAYS_DB_CONNECTION'),
+    ],
     'max_scan_days' => 3660,
-
-    'storage' => [
-        'driver' => 'config',
-    ],
-
-    'hijri' => [
-        'method' => 'umm_al_qura',
-        'adjustment' => 0,
-    ],
-
     'carbon_macros' => [
         'enabled' => true,
         'short_aliases' => true,
         'override_existing' => false,
     ],
-
     'iran_official' => [
         'enabled' => false,
         'year' => null,
         'profile' => null,
         'calendar_path' => null,
     ],
-
-    'profiles' => [
-        'iran' => [
-            'weekends' => ['Thursday', 'Friday'],
-
-            'holidays' => [
-                'gregorian' => [
-                    // '01-01' => 'New Year',
-                ],
-
-                'jalali' => [
-                    // '01-01' => 'Nowruz',
-                    // '04-01' => 'Example Jalali Holiday',
-                ],
-
-                'hijri' => [
-                    // '01-09' => 'Tasu’a',
-                    // '01-10' => 'Ashura',
-                ],
-            ],
-
-            'custom_holidays' => [
-                // '2026-06-25' => 'Company holiday',
-            ],
-
-            'extra_working_days' => [
-                // '2026-06-26' => 'Compensation working day',
-            ],
+    'definitions' => [
+        'default_profile' => 'iran',
+        'include_start_date' => false,
+        'hijri' => [
+            'method' => 'umm_al_qura',
+            'adjustment' => 0,
         ],
-
-        'global' => [
-            'weekends' => ['Saturday', 'Sunday'],
-
-            'holidays' => [
-                'gregorian' => [
-                    '01-01' => 'New Year',
-                    '12-25' => 'Christmas',
+        'profile_routing' => null,
+        'profiles' => [
+            'iran' => [
+                'weekends' => [
+                    0 => 'Thursday',
+                    1 => 'Friday',
                 ],
-
-                'jalali' => [
-                    // '01-01' => 'Nowruz',
+                'holidays' => [
+                    'gregorian' => [
+                    ],
+                    'jalali' => [
+                    ],
+                    'hijri' => [
+                    ],
                 ],
-
-                'hijri' => [
-                    // '01-09' => 'Tasu’a',
-                    // '01-10' => 'Ashura',
+                'custom_holidays' => [
+                ],
+                'extra_working_days' => [
                 ],
             ],
-
-            'custom_holidays' => [],
-
-            'extra_working_days' => [],
+            'global' => [
+                'weekends' => [
+                    0 => 'Saturday',
+                    1 => 'Sunday',
+                ],
+                'holidays' => [
+                    'gregorian' => [
+                        '01-01' => 'New Year',
+                        '12-25' => 'Christmas',
+                    ],
+                    'jalali' => [
+                    ],
+                    'hijri' => [
+                    ],
+                ],
+                'custom_holidays' => [
+                ],
+                'extra_working_days' => [
+                ],
+            ],
         ],
     ],
 ];

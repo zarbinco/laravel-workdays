@@ -7,9 +7,11 @@ namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 use Carbon\Carbon;
 use Carbon\CarbonImmutable;
 use Illuminate\Support\Carbon as IlluminateCarbon;
-use Illuminate\Support\Facades\Artisan;
+use Zarbinco\LaravelWorkdays\Configuration\DefinitionSource;
+use Zarbinco\LaravelWorkdays\Configuration\WorkdayDefinitions;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Support\CarbonMacroRegistrar;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
@@ -93,7 +95,7 @@ final class CarbonMacrosTest extends TestCase
                 '2026-06-29' => 'Global custom holiday',
             ],
         ]);
-        config()->set('workdays.default_profile', 'global');
+        config()->set('workdays.definitions.default_profile', 'global');
 
         $this->assertFalse(CarbonImmutable::parse('2026-06-29')->workdayIsBusinessDay());
     }
@@ -105,7 +107,7 @@ final class CarbonMacrosTest extends TestCase
                 '2026-06-29' => 'Global custom holiday',
             ],
         ]);
-        config()->set('workdays.default_profile', 'global');
+        config()->set('workdays.definitions.default_profile', 'global');
 
         $this->assertTrue(CarbonImmutable::parse('2026-06-29')->workdayIsBusinessDay('iran'));
     }
@@ -180,6 +182,18 @@ final class CarbonMacrosTest extends TestCase
         $this->assertSame('2026-06-29 11:00:00', $result->toDateTimeString());
     }
 
+    public function test_previous_time_macros_preserve_microsecond_precision_and_input_independence(): void
+    {
+        $this->setGlobalWorkingHours();
+        foreach ([Carbon::class, CarbonImmutable::class, IlluminateCarbon::class] as $class) {
+            $input = $class::parse('2026-06-29T17:00:00Z');
+            $result = $input->workdayPreviousBusinessTime('global');
+            $this->assertInstanceOf($class, $result);
+            $this->assertSame('2026-06-29T16:59:59.999999+00:00', $result->format('Y-m-d\TH:i:s.uP'));
+            $this->assertSame('17:00:00.000000', $input->format('H:i:s.u'));
+        }
+    }
+
     public function test_add_business_hours_macro(): void
     {
         $this->setGlobalWorkingHours();
@@ -249,16 +263,48 @@ final class CarbonMacrosTest extends TestCase
         $this->assertSame('2026-06-26', $date->toDateString());
     }
 
-    public function test_macros_work_with_imported_official_iran_holiday(): void
+    public function test_macros_follow_config_defined_iran_holidays(): void
     {
-        $this->loadWorkdayMigrations();
-        config()->set('workdays.storage.driver', 'database');
-        Artisan::call('workdays:import-iran-calendar', [
-            'year' => 1405,
-            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
+        $this->setProfileConfig('iran', [
+            'custom_holidays' => ['2026-03-21' => 'Official calendar entry supplied by Config'],
         ]);
 
         $this->assertFalse(CarbonImmutable::parse('2026-03-21')->workdayIsBusinessDay('iran'));
+        $this->assertTrue(CarbonImmutable::parse('2026-03-21')->workdayIsHoliday('iran'));
+    }
+
+    public function test_macro_source_selection_failure_remains_explicit(): void
+    {
+        config()->set('workdays.driver', 'database');
+
+        $this->expectException(DefinitionSourceException::class);
+        $this->expectExceptionMessage('definitions migration');
+
+        CarbonImmutable::parse('2026-06-29')->workdayIsBusinessDay('global');
+    }
+
+    public function test_macro_calls_use_the_bound_source_and_open_a_fresh_view_per_operation(): void
+    {
+        $source = new class implements DefinitionSource
+        {
+            public int $opened = 0;
+
+            public function open(): WorkdayDefinitions
+            {
+                $this->opened++;
+
+                return new WorkdayDefinitions(['default_profile' => 'source_only', 'include_start_date' => false,
+                    'hijri' => ['method' => 'mathematical', 'adjustment' => 0]],
+                    static fn (string $name): array => ['weekends' => [], 'custom_holidays' => ['2026-06-29' => 'Bound source holiday'],
+                        'working_hours' => ['Tuesday' => [['10:00', '11:00']]]],
+                    static fn (string $name): bool => $name === 'source_only');
+            }
+        };
+        $this->app->instance(DefinitionSource::class, $source);
+
+        $this->assertFalse(CarbonImmutable::parse('2026-06-29')->workdayIsBusinessDay());
+        $this->assertTrue(CarbonImmutable::parse('2026-06-30 10:15:00')->workdayIsBusinessTime());
+        $this->assertSame(2, $source->opened);
     }
 
     private function resetCarbonMacros(): void
@@ -285,13 +331,8 @@ final class CarbonMacrosTest extends TestCase
     private function setProfileConfig(string $profile, array $overrides): void
     {
         $config = config('workdays');
-        $config['profiles'][$profile] = array_replace_recursive($config['profiles'][$profile], $overrides);
+        $config['definitions']['profiles'][$profile] = array_replace_recursive($config['definitions']['profiles'][$profile], $overrides);
 
         config()->set('workdays', $config);
-    }
-
-    private function loadWorkdayMigrations(): void
-    {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
     }
 }

@@ -7,6 +7,7 @@ namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 use InvalidArgumentException;
 use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calendars\IranOfficialCalendar;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
@@ -75,7 +76,7 @@ final class ReleaseReadinessTest extends TestCase
     {
         config()->set('workdays.max_scan_days', 0);
 
-        $this->expectException(InvalidArgumentException::class);
+        $this->expectException(DefinitionSourceException::class);
         $this->expectExceptionMessage('The workdays max_scan_days config value must be a positive integer.');
 
         Workday::profile('global');
@@ -85,7 +86,7 @@ final class ReleaseReadinessTest extends TestCase
     {
         config()->set('workdays.max_scan_days', '3660');
 
-        $this->expectException(InvalidArgumentException::class);
+        $this->expectException(DefinitionSourceException::class);
         $this->expectExceptionMessage('The workdays max_scan_days config value must be a positive integer.');
 
         Workday::profile('global');
@@ -175,20 +176,20 @@ final class ReleaseReadinessTest extends TestCase
 
     public function test_profile_config_must_be_array(): void
     {
-        config()->set('workdays.profiles.global', 'invalid');
+        config()->set('workdays.definitions.profiles.global', 'invalid');
 
         $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('The workdays profile [global] config must be an array.');
+        $this->expectExceptionMessage('Definition profile [global] must be an array.');
 
         Workday::profile('global');
     }
 
     public function test_profiles_config_must_be_array(): void
     {
-        config()->set('workdays.profiles', 'invalid');
+        config()->set('workdays.definitions.profiles', 'invalid');
 
-        $this->expectException(InvalidArgumentException::class);
-        $this->expectExceptionMessage('The workdays profiles config value must be an array.');
+        $this->expectException(DefinitionSourceException::class);
+        $this->expectExceptionMessage('Config source requires workdays.definitions with operational settings and a profiles map.');
 
         Workday::profile('global');
     }
@@ -357,29 +358,31 @@ final class ReleaseReadinessTest extends TestCase
         $this->assertFileExists(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'.github'.DIRECTORY_SEPARATOR.'workflows'.DIRECTORY_SEPARATOR.'tests.yml');
     }
 
-    public function test_english_documentation_includes_database_storage_documentation(): void
+    public function test_english_documentation_states_both_exclusive_sources_and_explicit_transfer(): void
     {
         $documentation = $this->englishDocumentation();
 
-        $this->assertStringContainsString('Database Storage', $documentation);
-        $this->assertStringContainsString('workday_holiday_rules', $documentation);
-        $this->assertStringContainsString('workday_special_dates', $documentation);
+        $this->assertStringContainsString('DatabaseDefinitionRepository', $documentation);
+        $this->assertStringContainsString('--expected-revision', $documentation);
+        $this->assertStringContainsString('definitions', $documentation);
+        $this->assertStringContainsString('workdays.driver', $documentation);
     }
 
     public function test_english_documentation_includes_iran_preset_warning(): void
     {
         $documentation = $this->englishDocumentation();
 
-        $this->assertStringContainsString('not an exact official calendar generator', $documentation);
-        $this->assertStringContainsString('Hijri dates may differ', $documentation);
+        $this->assertStringContainsString('Hijri', $documentation);
+        $this->assertStringContainsString('iran_official', $documentation);
+        $this->assertStringContainsString('calendar_path', $documentation);
     }
 
     public function test_english_documentation_includes_max_scan_days_troubleshooting(): void
     {
         $documentation = $this->englishDocumentation();
 
-        $this->assertStringContainsString('No business day found within max_scan_days', $documentation);
         $this->assertStringContainsString('max_scan_days', $documentation);
+        $this->assertStringContainsString('RuntimeException', $documentation);
     }
 
     private function configureImpossibleBusinessDayProfile(): void
@@ -403,7 +406,7 @@ final class ReleaseReadinessTest extends TestCase
     private function setProfileConfig(string $profile, array $overrides): void
     {
         $config = config('workdays');
-        $config['profiles'][$profile] = array_replace_recursive($config['profiles'][$profile], $overrides);
+        $config['definitions']['profiles'][$profile] = array_replace_recursive($config['definitions']['profiles'][$profile], $overrides);
 
         config()->set('workdays', $config);
     }
@@ -415,6 +418,11 @@ final class ReleaseReadinessTest extends TestCase
 
     private function englishDocumentation(): string
     {
-        return file_get_contents(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'docs'.DIRECTORY_SEPARATOR.'en'.DIRECTORY_SEPARATOR.'README.md') ?: '';
+        $documentation = '';
+        foreach (glob(dirname(__DIR__, 2).'/docs/en/*.md') as $page) {
+            $documentation .= file_get_contents($page)."\n";
+        }
+
+        return $documentation;
     }
 }

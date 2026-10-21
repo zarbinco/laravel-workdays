@@ -11,13 +11,13 @@ use Error;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory;
 use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\DeliveryStageResult;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
 
@@ -28,11 +28,11 @@ final class DeliveryPlanningTest extends TestCase
         parent::setUp();
 
         config()->set('app.timezone', 'Pacific/Honolulu');
-        config()->set('workdays.default_profile', 'warehouse');
-        config()->set('workdays.storage.driver', 'config');
-        config()->set('workdays.include_start_date', false);
+        config()->set('workdays.definitions.default_profile', 'warehouse');
+        config()->set('workdays.driver', 'config');
+        config()->set('workdays.definitions.include_start_date', false);
         config()->set('workdays.max_scan_days', 14);
-        config()->set('workdays.profiles', [
+        config()->set('workdays.definitions.profiles', [
             'warehouse' => $this->profile($this->hours([['09:00', '12:00'], ['13:00', '17:00']])) + [
                 'cutoff' => ['timezone' => 'UTC', 'time' => '14:00'],
             ],
@@ -46,7 +46,7 @@ final class DeliveryPlanningTest extends TestCase
     {
         if ($holiday) {
             foreach (['warehouse', 'carrier', 'last_mile'] as $profile) {
-                config()->set('workdays.profiles.'.$profile.'.custom_holidays', ['2026-07-03' => 'Fixture closure']);
+                config()->set('workdays.definitions.profiles.'.$profile.'.custom_holidays', ['2026-07-03' => 'Fixture closure']);
             }
         }
 
@@ -94,8 +94,8 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_d_handoff_compares_independent_profile_timezones_as_instants(): void
     {
-        config()->set('workdays.profiles.warehouse.working_hours', $this->hours([['09:00', '17:00']]));
-        config()->set('workdays.profiles.carrier.working_hours', $this->hours([['10:00', '18:00']]));
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', $this->hours([['09:00', '17:00']]));
+        config()->set('workdays.definitions.profiles.carrier.working_hours', $this->hours([['10:00', '18:00']]));
         $plan = $this->singleStage(['id' => 'pickup', 'type' => 'handoff', 'profiles' => ['warehouse', 'carrier']]);
         $plan['profile_timezones'] = ['warehouse' => 'Asia/Tehran', 'carrier' => 'Asia/Dubai'];
 
@@ -107,8 +107,8 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_e_disjoint_working_hours_fail_with_stage_profiles_and_global_limit(): void
     {
-        config()->set('workdays.profiles.warehouse.working_hours', $this->hours([['09:00', '12:00']]));
-        config()->set('workdays.profiles.carrier.working_hours', $this->hours([['13:00', '17:00']]));
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', $this->hours([['09:00', '12:00']]));
+        config()->set('workdays.definitions.profiles.carrier.working_hours', $this->hours([['13:00', '17:00']]));
         config()->set('workdays.max_scan_days', 3);
 
         $this->assertPlanningFailure('2026-06-29 09:00', $this->handoffPlan(), 'pickup', ['warehouse', 'carrier'], 3);
@@ -150,11 +150,11 @@ final class DeliveryPlanningTest extends TestCase
     public function test_g_extra_working_day_fallback_hours_reopen_holiday_for_work_and_handoff(): void
     {
         foreach (['warehouse', 'carrier'] as $profile) {
-            config()->set('workdays.profiles.'.$profile.'.custom_holidays', ['2026-06-27' => 'Normally closed']);
-            config()->set('workdays.profiles.'.$profile.'.extra_working_days', ['2026-06-27' => 'Extra Saturday']);
+            config()->set('workdays.definitions.profiles.'.$profile.'.custom_holidays', ['2026-06-27' => 'Normally closed']);
+            config()->set('workdays.definitions.profiles.'.$profile.'.extra_working_days', ['2026-06-27' => 'Extra Saturday']);
         }
-        config()->set('workdays.profiles.warehouse.extra_working_day_hours', [['10:00', '14:00']]);
-        config()->set('workdays.profiles.carrier.extra_working_day_hours', [['11:00', '15:00']]);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_day_hours', [['10:00', '14:00']]);
+        config()->set('workdays.definitions.profiles.carrier.extra_working_day_hours', [['11:00', '15:00']]);
         $plan = $this->handoffPlan();
         array_unshift($plan['stages'], ['id' => 'prepare', 'type' => 'work', 'profile' => 'warehouse', 'minutes' => 60]);
 
@@ -177,12 +177,12 @@ final class DeliveryPlanningTest extends TestCase
     public function test_calculators_are_resolved_once_per_profile_and_reused_across_stages(): void
     {
         $resolved = [];
-        $manager = $this->app->make(WorkdayManager::class);
-        $planner = new DeliveryPlanner(function (string $profile) use (&$resolved, $manager) {
+        $context = $this->app->make(CalculationContextFactory::class)->open();
+        $planner = new DeliveryPlanner(function (string $profile) use (&$resolved, $context) {
             $resolved[$profile] = ($resolved[$profile] ?? 0) + 1;
 
-            return $manager->profile($profile);
-        });
+            return $context->calculator($profile);
+        }, $context->configuration(...), $context->maxScanDays, $context->hasProfile(...));
         $plan = self::referencePlan();
         $plan['stages'][] = ['id' => 'warehouse_again', 'type' => 'work', 'profile' => 'warehouse', 'minutes' => 0];
 
@@ -420,7 +420,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_invalid_profile_configuration_has_stage_context(): void
     {
-        config()->set('workdays.profiles.warehouse.weekends', ['Funday']);
+        config()->set('workdays.definitions.profiles.warehouse.weekends', ['Funday']);
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('prepare');
 
@@ -429,9 +429,9 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_missing_working_hours_has_stage_and_profile_context(): void
     {
-        $profile = config('workdays.profiles.warehouse');
+        $profile = config('workdays.definitions.profiles.warehouse');
         unset($profile['working_hours']);
-        config()->set('workdays.profiles.warehouse', $profile);
+        config()->set('workdays.definitions.profiles.warehouse', $profile);
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('prepare');
 
@@ -440,7 +440,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_all_closed_working_hours_fail_with_stage_and_horizon_context(): void
     {
-        config()->set('workdays.profiles.warehouse.working_hours', ['Monday' => []]);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', ['Monday' => []]);
         config()->set('workdays.max_scan_days', 2);
 
         $this->assertPlanningFailure('2026-06-29 10:00', $this->workPlan(0), 'prepare', ['warehouse'], 2);
@@ -448,7 +448,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_cutoff_omitted_never_validates_even_malformed_cutoff_configuration(): void
     {
-        config()->set('workdays.profiles.warehouse.cutoff', ['invalid' => 'ignored']);
+        config()->set('workdays.definitions.profiles.warehouse.cutoff', ['invalid' => 'ignored']);
 
         $result = Workday::planDelivery('2026-06-29 14:00', $this->workPlan(0));
 
@@ -458,9 +458,9 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_requested_missing_cutoff_policy_uses_existing_meaningful_error(): void
     {
-        $profile = config('workdays.profiles.warehouse');
+        $profile = config('workdays.definitions.profiles.warehouse');
         unset($profile['cutoff']);
-        config()->set('workdays.profiles.warehouse', $profile);
+        config()->set('workdays.definitions.profiles.warehouse', $profile);
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('warehouse');
 
@@ -480,7 +480,7 @@ final class DeliveryPlanningTest extends TestCase
     public function test_cutoff_timezone_mismatch_is_rejected_before_unavailable_cutoff_search(): void
     {
         config()->set('workdays.max_scan_days', 1);
-        config()->set('workdays.profiles.warehouse.cutoff.weekdays', array_fill_keys(range(1, 7), null));
+        config()->set('workdays.definitions.profiles.warehouse.cutoff.weekdays', array_fill_keys(range(1, 7), null));
         $plan = self::referencePlan();
         $plan['profile_timezones']['warehouse'] = 'Asia/Tehran';
         $this->expectException(WorkdayConfigurationException::class);
@@ -501,7 +501,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_cutoff_result_retains_its_original_timezone_and_serialization(): void
     {
-        config()->set('workdays.profiles.warehouse.cutoff', ['timezone' => 'Asia/Tehran', 'time' => '14:00']);
+        config()->set('workdays.definitions.profiles.warehouse.cutoff', ['timezone' => 'Asia/Tehran', 'time' => '14:00']);
         $plan = $this->workPlan(0);
         $plan['profile_timezones']['warehouse'] = 'Asia/Tehran';
         $plan['cutoff_profile'] = 'warehouse';
@@ -519,7 +519,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_cutoff_weekday_override_is_reused_and_only_routes_the_first_stage(): void
     {
-        config()->set('workdays.profiles.warehouse.cutoff.weekdays', ['Monday' => '11:00', 'Wednesday' => null]);
+        config()->set('workdays.definitions.profiles.warehouse.cutoff.weekdays', ['Monday' => '11:00', 'Wednesday' => null]);
         $plan = $this->workPlan(0);
         $plan['cutoff_profile'] = 'warehouse';
         $plan['stages'][] = ['id' => 'advance', 'type' => 'business_days', 'profile' => 'warehouse', 'days' => 1];
@@ -545,9 +545,9 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_cutoff_microfix_skips_a_future_date_with_no_actual_eligibility_window(): void
     {
-        config()->set('workdays.profiles.warehouse.weekends', []);
-        config()->set('workdays.profiles.warehouse.cutoff', ['timezone' => 'America/Santiago', 'time' => '01:00']);
-        config()->set('workdays.profiles.warehouse.working_hours', array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], [['09:00', '17:00']]));
+        config()->set('workdays.definitions.profiles.warehouse.weekends', []);
+        config()->set('workdays.definitions.profiles.warehouse.cutoff', ['timezone' => 'America/Santiago', 'time' => '01:00']);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], [['09:00', '17:00']]));
         config()->set('workdays.max_scan_days', 2);
         $plan = $this->workPlan(0);
         $plan['timezone'] = 'America/Santiago';
@@ -572,7 +572,7 @@ final class DeliveryPlanningTest extends TestCase
     public function test_work_consumes_business_minutes_across_lunch_and_half_day_windows(): void
     {
         $lunch = Workday::planDelivery('2026-06-29 11:30', $this->workPlan(120));
-        config()->set('workdays.profiles.warehouse.working_hours.Thursday', [['09:00', '13:00']]);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours.Thursday', [['09:00', '13:00']]);
         $halfDay = Workday::planDelivery('2026-07-02 12:00', $this->workPlan(120));
 
         $this->assertSame('2026-06-29T14:30:00.000000+00:00', $this->format($lunch->estimatedCompletionAt));
@@ -581,7 +581,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_handoff_respects_the_second_profiles_own_holiday(): void
     {
-        config()->set('workdays.profiles.carrier.custom_holidays', ['2026-06-29' => 'Carrier closed']);
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', ['2026-06-29' => 'Carrier closed']);
 
         $result = Workday::planDelivery('2026-06-29 13:00', $this->handoffPlan());
 
@@ -590,15 +590,15 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_business_days_are_strictly_future_independent_of_include_start_and_working_hours(): void
     {
-        $profile = config('workdays.profiles.carrier');
+        $profile = config('workdays.definitions.profiles.carrier');
         unset($profile['working_hours']);
-        config()->set('workdays.profiles.carrier', $profile);
-        config()->set('workdays.profiles.carrier.custom_holidays', ['2026-07-03' => 'Fixture holiday']);
+        config()->set('workdays.definitions.profiles.carrier', $profile);
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', ['2026-07-03' => 'Fixture holiday']);
         $plan = $this->daysPlan(2);
 
-        config()->set('workdays.include_start_date', false);
+        config()->set('workdays.definitions.include_start_date', false);
         $excluding = Workday::planDelivery('2026-07-02 20:12:34.123456', $plan);
-        config()->set('workdays.include_start_date', true);
+        config()->set('workdays.definitions.include_start_date', true);
         $including = Workday::planDelivery('2026-07-02 20:12:34.123456', $plan);
 
         $this->assertSame($excluding->toArray(), $including->toArray());
@@ -628,7 +628,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_business_days_fail_when_the_target_local_wall_clock_does_not_exist(): void
     {
-        config()->set('workdays.profiles.carrier.weekends', []);
+        config()->set('workdays.definitions.profiles.carrier.weekends', []);
         $plan = $this->daysPlan(1);
         $plan['profile_timezones']['carrier'] = 'America/New_York';
         $this->expectException(RuntimeException::class);
@@ -639,7 +639,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_business_days_need_a_real_wall_clock_only_on_the_final_counted_date(): void
     {
-        config()->set('workdays.profiles.carrier.weekends', []);
+        config()->set('workdays.definitions.profiles.carrier.weekends', []);
         $plan = $this->daysPlan(2);
         $plan['profile_timezones']['carrier'] = 'America/New_York';
 
@@ -650,7 +650,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_business_days_skip_a_nonexistent_civil_date_without_counting_it(): void
     {
-        config()->set('workdays.profiles.carrier.weekends', []);
+        config()->set('workdays.definitions.profiles.carrier.weekends', []);
         config()->set('workdays.max_scan_days', 2);
         $plan = $this->daysPlan(1);
         $plan['timezone'] = 'Pacific/Apia';
@@ -664,7 +664,7 @@ final class DeliveryPlanningTest extends TestCase
 
     public function test_skipped_civil_date_does_not_extend_the_global_date_label_boundary(): void
     {
-        config()->set('workdays.profiles.carrier.weekends', []);
+        config()->set('workdays.definitions.profiles.carrier.weekends', []);
         config()->set('workdays.max_scan_days', 1);
         $plan = $this->daysPlan(1);
         $plan['timezone'] = 'Pacific/Apia';
@@ -720,7 +720,7 @@ final class DeliveryPlanningTest extends TestCase
     public function test_work_search_reaches_every_profile_local_date_inside_the_global_plan_horizon(): void
     {
         config()->set('workdays.max_scan_days', 1);
-        config()->set('workdays.profiles.warehouse.working_hours', ['Wednesday' => [['01:00', '02:00']]]);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', ['Wednesday' => [['01:00', '02:00']]]);
         $plan = $this->workPlan(0);
         $plan['timezone'] = 'America/New_York';
 
@@ -734,7 +734,7 @@ final class DeliveryPlanningTest extends TestCase
     {
         config()->set('workdays.max_scan_days', 1);
         foreach (['warehouse', 'carrier'] as $profile) {
-            config()->set('workdays.profiles.'.$profile.'.working_hours', ['Wednesday' => [['01:00', '02:00']]]);
+            config()->set('workdays.definitions.profiles.'.$profile.'.working_hours', ['Wednesday' => [['01:00', '02:00']]]);
         }
         $plan = $this->handoffPlan();
         $plan['timezone'] = 'America/New_York';
@@ -748,8 +748,8 @@ final class DeliveryPlanningTest extends TestCase
     public function test_plan_horizon_includes_the_repeated_last_date_after_a_midnight_rollback(int $minutes, string $completion): void
     {
         config()->set('workdays.max_scan_days', 1);
-        config()->set('workdays.profiles.warehouse.working_hours', ['Saturday' => [['23:00', '23:30']]]);
-        config()->set('workdays.profiles.warehouse.extra_working_days', ['1988-10-29' => 'Explicit historical fixture']);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', ['Saturday' => [['23:00', '23:30']]]);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days', ['1988-10-29' => 'Explicit historical fixture']);
         $plan = $this->workPlan($minutes);
         $plan['timezone'] = 'America/St_Johns';
         $plan['profile_timezones']['warehouse'] = 'America/New_York';
@@ -768,24 +768,22 @@ final class DeliveryPlanningTest extends TestCase
         ];
     }
 
-    public function test_database_holiday_storage_delays_work_using_existing_provider(): void
+    public function test_config_holiday_delays_work_without_reading_conflicting_database_definitions(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'database');
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-06-29', 'type' => 'holiday', 'title' => 'Stored closure', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-06-29' => 'Configured closure']);
 
         $result = Workday::planDelivery('2026-06-29 10:00', $this->workPlan(60));
 
         $this->assertStage($result->stages[0], 'prepare', 'work', ['warehouse'], '2026-06-29 10:00', '2026-06-30 09:00', '2026-06-30 10:00');
     }
 
-    public function test_chain_database_reopening_overrides_config_holiday_for_work_and_handoff(): void
+    public function test_config_reopening_overrides_its_holiday_for_work_and_handoff(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'chain');
+        $this->publishConflictingDatabaseDefinitions();
         foreach (['warehouse', 'carrier'] as $profile) {
-            config()->set('workdays.profiles.'.$profile.'.custom_holidays', ['2026-06-29' => 'Configured closure']);
-            WorkdaySpecialDate::create(['profile' => $profile, 'date' => '2026-06-29', 'type' => 'working_day', 'title' => 'Stored reopening', 'is_active' => true]);
+            config()->set('workdays.definitions.profiles.'.$profile.'.custom_holidays', ['2026-06-29' => 'Configured closure']);
+            config()->set('workdays.definitions.profiles.'.$profile.'.extra_working_days', ['2026-06-29' => 'Configured reopening']);
         }
         $plan = $this->handoffPlan();
         array_unshift($plan['stages'], ['id' => 'prepare', 'type' => 'work', 'profile' => 'warehouse', 'minutes' => 60]);

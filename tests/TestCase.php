@@ -7,6 +7,7 @@ namespace Zarbinco\LaravelWorkdays\Tests;
 use Illuminate\Foundation\Application;
 use Illuminate\Support\Facades\File;
 use Orchestra\Testbench\TestCase as Orchestra;
+use Zarbinco\LaravelWorkdays\Configuration\DatabaseDefinitionRepository;
 use Zarbinco\LaravelWorkdays\WorkdaysServiceProvider;
 
 abstract class TestCase extends Orchestra
@@ -88,5 +89,20 @@ abstract class TestCase extends Orchestra
         );
 
         return $directory;
+    }
+
+    /** A complete conflicting Database release demonstrates that Config never merges another source. */
+    protected function publishConflictingDatabaseDefinitions(): void
+    {
+        $this->loadMigrationsFrom(dirname(__DIR__).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
+        $profiles = [];
+        foreach (['warehouse', 'support', 'support_base', 'support_priority', 'parent', 'child', 'priority', 'carrier', 'unrelated'] as $name) {
+            $profiles[$name] = ['weekends' => range(1, 7), 'custom_holidays' => ['2026-11-02' => 'Database-only closure'], 'working_hours' => []];
+        }
+        $this->app->make(DatabaseDefinitionRepository::class)->publish([
+            'default_profile' => 'warehouse', 'include_start_date' => true,
+            'hijri' => ['method' => 'mathematical', 'adjustment' => 1],
+            'profile_routing' => null, 'profiles' => $profiles,
+        ], expectedRevisionId: null);
     }
 }

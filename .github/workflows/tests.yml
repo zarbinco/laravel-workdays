@@ -76,3 +76,52 @@ jobs:
 
       - name: Run Tests
         run: composer test
+
+  mysql:
+    name: MySQL 8.4 / PHP 8.3 / Laravel 13
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.4
+        env:
+          MYSQL_ROOT_PASSWORD: disposable-root
+          MYSQL_DATABASE: workdays_test_refactor03
+          MYSQL_USER: workdays_test
+          MYSQL_PASSWORD: disposable-test
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -pdisposable-root --silent"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.3'
+          extensions: mbstring, intl, pdo_mysql, sqlite3, pdo_sqlite
+          coverage: none
+
+      - name: Install Dependencies
+        run: |
+          composer update --prefer-dist --no-interaction --no-progress --prefer-stable \
+            --with 'illuminate/support:^13.0' --with 'illuminate/console:^13.0' \
+            --with 'illuminate/database:^13.0' --with 'illuminate/filesystem:^13.0' \
+            --with 'orchestra/testbench:^11.0'
+
+      - name: Ensure Composer Manifest Was Not Mutated
+        run: git diff --exit-code composer.json
+
+      - name: Run Actual MySQL Tests Without Skips
+        env:
+          WORKDAYS_RUN_MYSQL_TESTS: '1'
+          WORKDAYS_MYSQL_TEST_HOST: '127.0.0.1'
+          WORKDAYS_MYSQL_TEST_PORT: '3306'
+          WORKDAYS_MYSQL_TEST_DATABASE: workdays_test_refactor03
+          WORKDAYS_MYSQL_TEST_USER: workdays_test
+          WORKDAYS_MYSQL_TEST_PASSWORD: disposable-test
+        run: php vendor/bin/phpunit tests/Integration/MySqlDefinitionSourceTest.php --fail-on-skipped

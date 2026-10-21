@@ -4,14 +4,20 @@ declare(strict_types=1);
 
 namespace Zarbinco\LaravelWorkdays\Support;
 
+use Closure;
 use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 
 /** Resolves only one selected hierarchy; snapshots never outlive this operation. */
 final readonly class ProfileConfigResolver
 {
-    /** @param array<array-key, mixed> $profiles */
-    public function __construct(private array $profiles) {}
+    private Closure $readProfile;
+
+    /** @param callable(string): array $readProfile Raw layers, loaded only along the selected ancestry. */
+    public function __construct(callable $readProfile)
+    {
+        $this->readProfile = Closure::fromCallable($readProfile);
+    }
 
     /** @return array<string, mixed> */
     public function resolve(string $profile): array
@@ -36,11 +42,11 @@ final readonly class ProfileConfigResolver
             throw new WorkdayConfigurationException($context.' exceeds the maximum depth of 16 profiles.');
         }
 
-        if (! array_key_exists($profile, $this->profiles)) {
-            throw new WorkdayConfigurationException($context.' references a missing profile.');
+        try {
+            $layer = ($this->readProfile)($profile);
+        } catch (InvalidArgumentException $exception) {
+            throw new WorkdayConfigurationException($context.': '.$exception->getMessage(), previous: $exception);
         }
-
-        $layer = $this->profiles[$profile];
 
         if (! is_array($layer)) {
             throw new WorkdayConfigurationException($context.' must contain array profile definitions.');

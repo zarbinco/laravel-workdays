@@ -1,129 +1,79 @@
 # Changelog
 
-All notable changes to `zarbinco/laravel-workdays` will be documented in this file.
+Changes to `zarbinco/laravel-workdays`. Entries marked **Unreleased** describe repository work and do not claim a published package version or release date.
 
 ## 1.0.0 - Unreleased
 
-- Added opt-in `bulkCalculate()` dispatch for ten existing calendar, working-time, cutoff, delivery, slot, recurrence, SLA, and reverse APIs with ordered immutable summaries, preserved typed results, bounded batches, and explicit collect/throw error policies.
-- Added batch-local configuration/calculator/provider reuse and optional bounded grouped holiday prefetch with negative caching, lazy outside-range fallback, fresh independent batch contexts, and existing config/database/chain and inherited-profile semantics.
-- Added focused parity, validation, database-query and worker-freshness regression coverage, an opt-in repeated-sample benchmark, and aligned English/Persian schema, consistency, e-commerce chunking, limitations, and twenty-check verification guides.
-- Added opt-in recurring business schedules through `recurringSchedule()`, with direct original-anchor weekly and Gregorian/Jalali monthly cycles, strict date-only inputs, month-end handling, and no drift after holiday or short-month adjustments.
-- Added bounded next/previous/skip business-date adjustment, explicit skipped cycles, collision rejection/allowance with chronological safeguards, and immutable date-only result objects with stable serialization using existing calendars, storage, and inherited profiles.
-- Added focused recurrence/calendar/storage/timezone regression coverage and aligned English/Persian subscription examples, limits, application responsibilities, and seventeen-check local verification guides without automatic order creation, payments, or execution.
-- Added opt-in reverse delivery scheduling through `reversePlanDelivery()`, finding the latest calendar-feasible order receipt for an inclusive completion deadline with an explicit bounded lookback and the existing forward-plan schema.
-- Added immutable UTC `ReverseDeliveryPlanResult` objects with nullable infeasibility results, exact microsecond slack, separate receipt/planning/first-stage timestamps, and a verified nested forward result while preserving cutoff, calendar, timezone, and stage semantics.
-- Added focused reverse-scheduling regression coverage and aligned English/Persian API, e-commerce integration, search limitations, and thirteen-check local verification guides without order placement, reservations, or persistence.
-- Added opt-in business SLA evaluation through `evaluateSla()` with immutable UTC results, exact working-time budgets, consumed/paused/remaining/overdue metrics, and stable active/paused/breached statuses.
-- Added closed and ongoing pause normalization, explicit resume handling, microsecond-aware deadlines and breach boundaries, and a shared start-date horizon while reusing existing calendars, inherited schedules, and overnight behavior.
-- Added focused SLA/calendar/storage/timezone regression coverage and aligned English/Persian API, return-request integration, precision, limitations, and manual verification documentation without persistence or automatic monitoring.
-- Added opt-in delivery-promise capture and comparison with portable immutable snapshots, bounded effective-calendar evidence, deterministic calendar fingerprints, and separate payload-integrity checks.
-- Added frozen config/database/chain holiday materialization for original estimates, explicit shared horizons, inherited-profile and overnight/cutoff integration, runtime metadata, and observed calendar-day differences.
-- Added unchanged/earlier/later/unresolvable comparison results without automatic promise updates or persistence, strict snapshot restoration, focused regression coverage, and aligned English/Persian usage and manual verification guides.
-- Added optional hierarchical profile inheritance with bounded parent chains, normalized weekday overrides, explicit section-aware merge/clear rules, and selected-child identity across config/database/chain storage.
-- Added deterministic context-based profile routing through `resolveProfile()` and `profileFor()`, with strict matching, specificity/configuration-order precedence, explicit fallback, and immutable `ResolvedProfile` results without raw context exposure.
-- Integrated inherited cutoff, overnight, and exceptional schedules with existing delivery planning and slot generation, preserving lazy cutoff validation and legacy paths, with focused regression tests and aligned English/Persian configuration and manual guides.
-- Added optional exact-date and inclusive seasonal working-hour overrides with explicit empty schedules, strict Gregorian validation, and deterministic calendar-first precedence.
-- Added explicitly enabled overnight and full-day schedules, normalized daily carry-in windows, overlap-safe working-minute calculations, and strict local-boundary handling across timezone transitions while preserving the legacy profile path.
-- Integrated enhanced schedules with existing delivery planning and single-day slot generation, including representable `24:00` slot endings, focused regression coverage, and aligned English/Persian configuration and manual verification guides.
-- Added opt-in calendar-eligible delivery and pickup intervals through `Workday::deliverySlots()` and `WorkdayManager`, with immutable UTC `DeliverySlotsResult` and `DeliverySlot` objects and explicit local serialization.
-- Added strict slot-policy validation, elapsed notice buffers, working-window-aligned grids, bounded local-date searches, result limits, and conservative timezone-transition handling using existing profile calendars and holiday providers.
-- Added Phase 02 readiness integration, focused slot/calendar/storage/timezone and compatibility coverage, and aligned English/Persian usage, application responsibilities, limitations, and manual verification documentation.
-- Added opt-in multi-stage delivery estimates through `Workday::planDelivery()` and `WorkdayManager`, with immutable UTC `DeliveryPlanResult` and `DeliveryStageResult` objects.
-- Added profile-local working-minute stages, simultaneous two-profile handoffs, strictly future business-date lead times, optional reuse of order cut-off routing, and one global planning horizon.
-- Added strict delivery-plan validation and timestamp handling, per-invocation calculator reuse, focused calendar/storage/timezone integration tests, and aligned English/Persian configuration, store integration, result, and manual verification documentation.
-- Added opt-in per-profile order cut-off resolution through the default facade/manager and selected profile calculators, with an immutable `CutoffResult` and stable reason codes.
-- Added strict timestamp normalization in a required policy timezone, exclusive microsecond-aware boundaries, weekday cut-off overrides, disabled weekdays, and bounded future business-date assignment independent of working hours.
-- Added English/Persian cut-off configuration, integration and manual verification examples, plus focused calendar, storage, timezone, parsing, and compatibility tests.
-- Added Laravel validation rule factory support.
-- Added day-level validation rules for business days, non-working days, weekends, calendar holidays, custom holidays, and extra working days.
-- Added business-time validation rules and inclusive relative business-day validation rules.
-- Added README examples and tests for validation rules.
-- Added optional Carbon and CarbonImmutable macro registration.
-- Added workday-prefixed Carbon macro methods for day-level, explainability, and business-time APIs.
-- Added optional short Carbon macro aliases with conflict-safe registration.
-- Added README examples and tests for Carbon macro configuration, profile routing, and mutable/immutable return behavior.
-- Added optional `working_hours` profile config for business-time calculations.
-- Added business-time APIs for checking, navigating, adding, and diffing working minutes and hours.
-- Added support for half-days, split working windows, and extra-working-day fallback hours.
-- Added business-hours validation, README examples, and test coverage while preserving existing day-level APIs.
-- Added opt-in Iran official yearly calendar dataset support with inactive/null defaults.
-- Added the optional Iran 1405 official holiday dataset resource sourced from the University of Tehran Calendar Center official calendar.
-- Added explicit `workdays:import-iran-calendar` support with dry-run, idempotent import, profile override, and force-update behavior.
-- Added README documentation and tests for official Iran yearly datasets and import behavior.
-- Added `DayInfo` and `DayReason` value objects for date explainability.
-- Added `explain()` on the facade/default profile and profile calculators.
-- Added reason reporting for weekends, recurring Gregorian/Jalali/Hijri holidays, custom holidays, and extra working days.
-- Added override reporting so extra working days can show which weekend or holiday reasons they superseded.
-- Added explainability tests and README examples.
-- Hardened the v1.0.0 release surface with an explicit Laravel/PHP CI matrix.
-- Narrowed declared Laravel support to Laravel 12 and 13 so Composer metadata matches secure, installable CI coverage.
-- Improved migration publishing to use Laravel's package migration publishing helper when available.
-- Tightened config validation for unknown holiday calendars, invalid recurring holiday keys, invalid weekend values, storage drivers, profile shape, and `max_scan_days`.
-- Polished README badges, compatibility notes, storage documentation, migration publishing notes, and Iran preset limitations.
-- Added the core Laravel-first workday and business-day calculation engine.
-- Added config-backed workday profiles with default profile support.
-- Added Gregorian, Jalali, and Hijri recurring holiday support.
-- Added exact custom holidays and extra working day overrides.
-- Added Iran preset config and installer support.
-- Added config, database, and chain storage drivers.
-- Added publishable database migrations and Eloquent models for database storage.
-- Added Artisan installer and publish tags for config, Iran preset, and migrations.
-- Added max scan protection for impossible business-day profiles.
-- Added stricter config, date-key, storage-driver, and missing-migration validation.
-- Added release documentation, MIT license, contribution/security notes, formatting scripts, and GitHub Actions test workflow.
+### Calendar definitions and storage
+
+- Provide complete, exclusive `config` and `database` sources for shared settings, named profiles, inheritance, routing, holidays, working hours and cutoff. A calculation uses one source without field-level mixing or silent fallback.
+- Use root `driver` with operational settings under `definitions`: `default_profile`, `include_start_date`, `hijri`, `profile_routing` and `profiles`. Reject old root settings, `storage.driver`, `chain` and `hybrid` with explicit guidance.
+- Store Database definitions as validated immutable revisions, raw profile documents and an active-revision pointer. Require an expected revision for edits, reject stale writes, support identical-content no-ops and publish historical content as a new revision.
+- Pin revision and connection per operation; reuse selected profiles, ancestors and negative lookups. A retained calculator keeps its original view. New operations observe later committed definitions.
+- Publish complete logical documents atomically, with deterministic content integrity, rollback on failure and caller-owned outer transactions. Preserve exact case/accent/numeric profile names and raw omission, aliases, nulls, false flags and empty sections.
+- Add strict versioned JSON export/import with explicit source selection, initialization/current-revision preconditions, protected output files and zero-write dry runs. No migration, initialization, dataset fetch, source switch or data conversion occurs automatically.
+- Retire partial holiday tables/models/provider internals. Removing package migration files does not drop application tables or remove already published migration copies.
+- Reject duplicate weekend aliases, unsupported holiday-title types, malformed stored values, corrupt profile documents, duplicate JSON members and publication/transfer budget violations.
+
+### Business days and working time
+
+- Preserve business-day predicates, next/previous dates, addition/subtraction, differences, include-start policy, `calculate()` and explainable `DayInfo`/`DayReason` results.
+- Support Gregorian, Jalali and Hijri recurring holidays, exact custom holidays, extra working days, Iran presets and explicit local official-calendar imports.
+- Guard calendar imports against reactivating parent holidays excluded by an explicitly cleared child map. `--force` cannot bypass that guard, a stale revision or date validation. Identical imports remain no-ops.
+- Provide one effective schedule and microsecond interval engine for ordinary, split, half-day, special, seasonal, overnight and full-day schedules. Preserve calendar-first precedence, owner-date carry-in, overlap union and independent slot windows.
+- Preserve seconds and microseconds when consuming integer-minute budgets. Aggregate exact overlap before truncating a public minute difference once; public hour differences remain minutes divided by 60.
+- Return the last included microsecond when navigating before an exclusive close. Materialize configured local wall-clock boundaries correctly across daylight-saving changes and skipped midnights.
+- Keep fixed search budgets, explicit supported date ranges and guarded duration/hour overflow. Unsupported backwards/split civil-date histories fail explicitly; ordinary repeated-hour periods remain representable.
+
+### Delivery, schedules and tracking
+
+- Add profile-local cutoff resolution with exclusive boundaries, weekday overrides, disabled weekdays and bounded future-date assignment. Skip dates whose actual acceptance window is empty.
+- Add multi-stage delivery planning with exact work consumption, simultaneous two-profile handoff, strictly future business-day transit, optional cutoff routing and one global horizon.
+- Add delivery/pickup slot grids, notice buffers, local-date bounds, limits and immutable UTC/local serialization. Slots describe calendar eligibility and do not reserve capacity.
+- Add reverse scheduling with an inclusive completion deadline, bounded lookback, exact latest receipt and a verified forward result. Correct the split 120-minute lunch example to `11:00:00.000000`; retain legitimate exclusive handoff/cutoff microseconds.
+- Add delivery-promise capture, offline restoration, calendar fingerprints, payload integrity, current comparison and immutable original results. Fingerprints detect content differences and are not authentication.
+- Use calculation semantics **2**, separately from outer/evidence schema **1**. Reject unsupported older semantics, rehashed corruption and inconsistent current results. Matching timezone data enables complete frozen replay; runtime drift retains captured UTC checks with documented civil-date limitations.
+- Restore valid daytime snapshots around Apia's skipped date and Havana's repeated midnight without requiring an unused hypothetical next `24:00`. Continue rejecting invalid actual configured endpoints, skipped-date evidence, cross-date positive time and unsupported split-date history.
+- Add SLA working-time targets, overlapping pause union, open pause/resume handling, exact deadlines and breach boundaries, and immutable active/paused/breached results. Applications supply events and perform notifications.
+- Add original-anchor weekly and Gregorian/Jalali monthly recurrence, short-month policies, holiday adjustment, explicit skipped cycles, collision policies and bounded chronological safeguards. Recurrence calculates dates without creating orders, payments or jobs.
+- Add ordered bulk calculation for ten operation types, typed result retention, bounded batches, collect/throw error handling, context reuse and bounded prefetch hints. Source, database and programming failures remain visible.
+
+### Laravel integration and documentation
+
+- Add day/time/relative-business-day validation rules and conflict-safe Carbon/CarbonImmutable macros, with optional short aliases and mutable/immutable return behavior.
+- Add explicit installer presets/source selection and publishing tags. Keep annual Iran data optional: a complete official annual dataset is neither automatically bundled, downloaded nor imported.
+- Maintain PHP/Laravel compatibility and opt-in disposable MySQL integration coverage. Historical test and resource evidence is recorded in the [capability matrix](FEATURE_PRESERVATION_MATRIX.md).
+- Organize English and Persian task guides, reference material and executable examples; preserve left-to-right code inside right-to-left Persian pages. Correct precision, calendar scope, publication and result-object explanations.
 
 ## 0.5.1 - Unreleased
 
-- Declared Laravel console, database, and filesystem component dependencies.
-- Standardized storage driver validation.
-- Improved database storage error message when migrations are missing.
+- Declared Laravel console, database and filesystem component dependencies.
+- Standardized storage driver validation and missing-migration diagnostics.
 
 ## 0.5.0 - Unreleased
 
-- Added `config`, `database`, and `chain` holiday storage drivers.
-- Added database migrations for recurring holiday rules and exact special dates.
-- Added Eloquent models for `workday_holiday_rules` and `workday_special_dates`.
-- Added a holiday provider layer to keep the public Workday API unchanged across storage modes.
-- Added `workdays-migrations` publish tag.
-- Updated `workdays:install` to support `--storage=config|database|chain`.
-- Preserved extra working day precedence over weekends and holidays in every storage mode.
-- Documented database storage setup, schema, and limitations.
+- Introduced config/database/chain holiday storage, rule/special-date migrations and models, a holiday provider layer, migration publishing and installer storage selection.
+- Preserved extra-working-day precedence and documented storage setup. These partial-storage interfaces are historical; current source selection and schema are described above.
 
 ## 0.4.0 - Unreleased
 
-- Added Iran preset config.
-- Added Persian install option.
-- Added `workdays:install` command.
-- Added dedicated publish tag for Iran config.
-- Documented Iran preset limitations and override strategy.
+- Added the Iran preset, Persian installation option, installer command and Iran-config publishing tag.
+- Documented preset limitations and override behavior.
 
 ## 0.3.0 - Unreleased
 
-- Added Hijri recurring holiday support.
-- Added configurable Hijri calculation method.
-- Added Hijri holiday detection.
-- Updated calendar holiday detection to include Gregorian, Jalali, and Hijri holidays.
-- Added Hijri holiday key validation.
+- Added Hijri recurring holidays, holiday predicates, configurable calculation method and adjustment, and calendar-key validation.
 
 ## 0.2.0 - Unreleased
 
-- Added Jalali recurring holiday support through Verta.
-- Added Jalali holiday detection.
-- Added Gregorian/Jalali-specific calendar holiday predicates.
-- Added holiday key validation.
+- Added Verta-backed Jalali recurring holidays and calendar-specific predicates.
 
 ## 0.1.1 - Unreleased
 
-- Hardened `isHoliday()` semantics so it means non-working day.
-- Added public predicates for weekend, calendar holiday, custom holiday, extra working day, and non-working day checks.
-- Added validation for invalid weekend config value types.
-- Added tests for predicate semantics, negative inputs, invalid dates, include-start behavior, and `BusinessDayResult`.
+- Defined `isHoliday()` as non-working-day membership and added distinct weekend, calendar-holiday, custom-holiday and extra-working-day predicates.
+- Added checks for invalid weekend values, negative inputs, dates, include-start behavior and `BusinessDayResult`.
 
 ## 0.1.0 - Unreleased
 
-- Added Phase 1 foundation package structure.
-- Added config-backed workday profiles.
-- Added Gregorian business-day calculations using `CarbonImmutable`.
-- Added weekday normalization for English and Persian aliases.
-- Added support for weekly weekends, recurring Gregorian holidays, custom exact-date holidays, and extra working days.
-- Added PHPUnit/Testbench test coverage.
+- Added the package foundation, named Config calendars, Gregorian business-day calculations with `CarbonImmutable`, weekday aliases, recurring/exact holidays and extra working days.
+- Added PHPUnit/Testbench coverage, MIT license, contributor/security notes, formatting scripts and the test workflow.

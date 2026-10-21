@@ -6,12 +6,12 @@ namespace Zarbinco\LaravelWorkdays;
 
 use Carbon\CarbonImmutable;
 use DateTimeInterface;
-use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Bulk\BulkCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayResult;
 use Zarbinco\LaravelWorkdays\Calendar\DeliveryPromiseAuditor;
-use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContext;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory;
 use Zarbinco\LaravelWorkdays\Data\BulkCalculationResult;
 use Zarbinco\LaravelWorkdays\Data\CutoffResult;
 use Zarbinco\LaravelWorkdays\Data\DayInfo;
@@ -27,85 +27,35 @@ use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
 use Zarbinco\LaravelWorkdays\Delivery\DeliverySlotGenerator;
 use Zarbinco\LaravelWorkdays\Delivery\ReverseDeliveryPlanner;
-use Zarbinco\LaravelWorkdays\Holidays\ChainHolidayProvider;
-use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
-use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
-use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
 use Zarbinco\LaravelWorkdays\Recurring\RecurringScheduleGenerator;
 use Zarbinco\LaravelWorkdays\Sla\SlaEvaluator;
-use Zarbinco\LaravelWorkdays\Support\ProfileConfigResolver;
-use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
-use Zarbinco\LaravelWorkdays\Support\ProfileRouter;
-use Zarbinco\LaravelWorkdays\Support\StorageDriver;
 
-final class WorkdayManager
+/** Long-lived service; each public operation opens its own source view and context. */
+final readonly class WorkdayManager
 {
+    public function __construct(private CalculationContextFactory $contexts) {}
+
     public function bulkCalculate(array $operations, array $options = []): BulkCalculationResult
     {
-        return (new BulkCalculator)->calculate($operations, $options);
+        return (new BulkCalculator($this->contexts))->calculate($operations, $options);
     }
 
     public function profile(string $profile): BusinessDayCalculator
     {
-        return $this->calculator($profile);
+        return $this->contexts->open()->calculator($profile);
     }
 
-    /** @param array<string, mixed> $context */
     public function resolveProfile(array $context): ResolvedProfile
     {
-        $profiles = $this->profiles();
-        $selection = $this->selectProfile($context, $profiles);
-        $this->effectiveProfileConfig($selection->profile, $profiles);
-
-        return $selection;
+        return $this->contexts->open()->resolveProfile($context);
     }
 
-    /** @param array<string, mixed> $context */
     public function profileFor(array $context): BusinessDayCalculator
     {
-        $profiles = $this->profiles();
-        $selection = $this->selectProfile($context, $profiles);
-        $effective = $this->effectiveProfileConfig($selection->profile, $profiles);
+        $operation = $this->contexts->open();
+        $selection = $operation->resolveProfile($context);
 
-        return $this->calculator($selection->profile, profileConfig: $effective, profiles: $profiles);
-    }
-
-    /**
-     * @param  array<string, mixed>  $context
-     * @param  array<string, mixed>  $profiles
-     */
-    private function selectProfile(array $context, array $profiles): ResolvedProfile
-    {
-        return (new ProfileRouter($profiles))->resolve($context, config('workdays.profile_routing'));
-    }
-
-    /**
-     * @param  array<string, mixed>|null  $profileConfig
-     * @param  array<string, mixed>|null  $profiles
-     */
-    private function calculator(string $profile, ?int $scanLimit = null, ?array $profileConfig = null, ?array $profiles = null): BusinessDayCalculator
-    {
-        $profiles ??= $this->profiles();
-
-        if (! array_key_exists($profile, $profiles)) {
-            throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $profile));
-        }
-
-        $profileConfig ??= $this->effectiveProfileConfig($profile, $profiles);
-
-        if (is_array($profiles[$profile]) && array_key_exists('extends', $profiles[$profile])) {
-            // Config holidays must see the same snapshot, under the child's actual name.
-            $profiles[$profile] = $profileConfig;
-        }
-
-        return new BusinessDayCalculator(
-            profile: $profile,
-            profileConfig: $profileConfig,
-            includeStartDate: $this->includeStartDate(),
-            maxScanDays: $scanLimit ?? $this->maxScanDays(),
-            hijriCalendar: HijriCalendarAdapter::fromConfig(),
-            holidayProvider: $this->holidayProvider($profiles),
-        );
+        return $operation->calculator($selection->profile);
     }
 
     public function isBusinessDay(string|DateTimeInterface $date): bool
@@ -118,126 +68,52 @@ final class WorkdayManager
         return $this->defaultCalculator()->resolveCutoff($receivedAt);
     }
 
-    /**
-     * @param  array<string, mixed>  $plan
-     */
     public function planDelivery(string|DateTimeInterface $receivedAt, array $plan): DeliveryPlanResult
     {
-        $profiles = null;
-        $resolved = [];
-        $resolveConfig = function (string $profile) use (&$profiles, &$resolved): array {
-            $profiles ??= $this->profiles();
+        return $this->planner($this->contexts->open())->plan($receivedAt, $plan);
+    }
 
-            return $resolved[$profile] ??= $this->effectiveProfileConfig($profile, $profiles);
-        };
+    public function deliverySlots(string|DateTimeInterface $readyAt, array $options): DeliverySlotsResult
+    {
+        $context = $this->contexts->open();
 
-        return (new DeliveryPlanner(
-            function (string $profile, int $scanLimit) use ($resolveConfig, &$profiles): BusinessDayCalculator {
-                $effective = $resolveConfig($profile);
+        return (new DeliverySlotGenerator($context->calculator(...), $context->maxScanDays))->generate($readyAt, $options);
+    }
 
-                return $this->calculator($profile, $scanLimit, $effective, $profiles);
-            },
-            $resolveConfig,
-        ))->plan($receivedAt, $plan);
+    public function evaluateSla(string|DateTimeInterface $startedAt, string|DateTimeInterface $evaluatedAt, array $options): SlaResult
+    {
+        $context = $this->contexts->open();
+
+        return (new SlaEvaluator($context->calculator(...), $context->configuration(...), $context->maxScanDays))->evaluate($startedAt, $evaluatedAt, $options);
+    }
+
+    public function recurringSchedule(string|DateTimeInterface $anchorDate, array $options): RecurringScheduleResult
+    {
+        $context = $this->contexts->open();
+
+        return (new RecurringScheduleGenerator($context->calculator(...), $context->maxScanDays))->generate($anchorDate, $options);
+    }
+
+    public function reversePlanDelivery(string|DateTimeInterface $desiredCompletionAt, array $plan, array $options): ReverseDeliveryPlanResult
+    {
+        $context = $this->contexts->open();
+
+        return (new ReverseDeliveryPlanner($this->planner($context), $context->calculator(...), $context->configuration(...), $context->maxScanDays))->plan($desiredCompletionAt, $plan, $options);
     }
 
     public function captureDeliveryPromise(string|DateTimeInterface $receivedAt, array $plan, array $options): DeliveryPromiseSnapshot
     {
-        return (new DeliveryPromiseAuditor)->capture($receivedAt, $plan, $options);
-    }
-
-    /** @param array<string, mixed> $plan @param array<string, mixed> $options */
-    public function reversePlanDelivery(string|DateTimeInterface $desiredCompletionAt, array $plan, array $options): ReverseDeliveryPlanResult
-    {
-        $profiles = $this->profiles();
-        $resolved = [];
-        $calculators = [];
-        $provider = null;
-        $hijri = null;
-        $resolveConfig = function (string $profile) use ($profiles, &$resolved): array {
-            return $resolved[$profile] ??= $this->effectiveProfileConfig($profile, $profiles);
-        };
-        $resolveCalculator = function (string $profile, int $scanLimit) use ($profiles, &$resolved, &$calculators, &$provider, &$hijri, $resolveConfig): BusinessDayCalculator {
-            if (isset($calculators[$profile][$scanLimit])) {
-                return $calculators[$profile][$scanLimit];
-            }
-
-            $effective = $resolveConfig($profile);
-            // All selected configurations are resolved before the first provider is built.
-            // Keep child names intact, so database rows never inherit from a parent profile.
-            $provider ??= $this->holidayProvider(array_replace($profiles, $resolved));
-            $hijri ??= HijriCalendarAdapter::fromConfig();
-
-            return $calculators[$profile][$scanLimit] = new BusinessDayCalculator(
-                profile: $profile,
-                profileConfig: $effective,
-                includeStartDate: $this->includeStartDate(),
-                maxScanDays: $scanLimit,
-                hijriCalendar: $hijri,
-                holidayProvider: $provider,
-            );
-        };
-
-        return (new ReverseDeliveryPlanner(
-            new DeliveryPlanner($resolveCalculator, $resolveConfig), $resolveCalculator, $resolveConfig,
-        ))->plan($desiredCompletionAt, $plan, $options);
+        return (new DeliveryPromiseAuditor($this->contexts->open()))->capture($receivedAt, $plan, $options);
     }
 
     public function compareDeliveryPromise(DeliveryPromiseSnapshot|array $snapshot): DeliveryPromiseComparison
     {
-        return (new DeliveryPromiseAuditor)->compare($snapshot);
+        return (new DeliveryPromiseAuditor($this->contexts->open()))->compare($snapshot);
     }
 
-    /** @param array<string, mixed> $options */
-    public function evaluateSla(string|DateTimeInterface $startedAt, string|DateTimeInterface $evaluatedAt, array $options): SlaResult
+    private function planner(CalculationContext $context): DeliveryPlanner
     {
-        $profiles = null;
-        $effective = null;
-        $resolveConfig = function (string $profile) use (&$profiles, &$effective): array {
-            $profiles ??= $this->profiles();
-
-            return $effective ??= $this->effectiveProfileConfig($profile, $profiles);
-        };
-
-        return (new SlaEvaluator(
-            function (string $profile, int $limit) use ($resolveConfig, &$profiles): BusinessDayCalculator {
-                $profileConfig = $resolveConfig($profile);
-
-                return $this->calculator($profile, $limit, $profileConfig, $profiles);
-            },
-            $resolveConfig,
-        ))->evaluate($startedAt, $evaluatedAt, $options);
-    }
-
-    /**
-     * @param  array<string, mixed>  $profiles
-     * @return array<string, mixed>
-     */
-    private function effectiveProfileConfig(string $profile, array $profiles): array
-    {
-        if (! array_key_exists($profile, $profiles)) {
-            throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $profile));
-        }
-
-        if (is_array($profiles[$profile]) && array_key_exists('extends', $profiles[$profile])) {
-            return (new ProfileConfigResolver($profiles))->resolve($profile);
-        }
-
-        return ProfileConfigValidator::validate($profile, $profiles[$profile]);
-    }
-
-    /**
-     * @param  array<string, mixed>  $options
-     */
-    public function deliverySlots(string|DateTimeInterface $readyAt, array $options): DeliverySlotsResult
-    {
-        return (new DeliverySlotGenerator($this->profile(...)))->generate($readyAt, $options);
-    }
-
-    /** @param array<string, mixed> $options */
-    public function recurringSchedule(string|DateTimeInterface $anchorDate, array $options): RecurringScheduleResult
-    {
-        return (new RecurringScheduleGenerator($this->profile(...)))->generate($anchorDate, $options);
+        return new DeliveryPlanner($context->calculator(...), $context->configuration(...), $context->maxScanDays, $context->hasProfile(...));
     }
 
     public function explain(string|DateTimeInterface $date): DayInfo
@@ -365,57 +241,8 @@ final class WorkdayManager
 
     private function defaultCalculator(): BusinessDayCalculator
     {
-        $profile = config('workdays.default_profile');
+        $context = $this->contexts->open();
 
-        if (! is_string($profile) || $profile === '') {
-            throw new InvalidArgumentException('The workdays default_profile config value must be a non-empty string.');
-        }
-
-        return $this->profile($profile);
-    }
-
-    /**
-     * @return array<string, array<string, mixed>>
-     */
-    private function profiles(): array
-    {
-        $profiles = config('workdays.profiles', []);
-
-        if (! is_array($profiles)) {
-            throw new InvalidArgumentException('The workdays profiles config value must be an array.');
-        }
-
-        return $profiles;
-    }
-
-    private function includeStartDate(): bool
-    {
-        return ProfileConfigValidator::validateIncludeStartDate(config('workdays.include_start_date', false));
-    }
-
-    private function maxScanDays(): int
-    {
-        return ProfileConfigValidator::validateMaxScanDays(config('workdays.max_scan_days', 3660));
-    }
-
-    /**
-     * @param  array<string, array<string, mixed>>  $profiles
-     */
-    private function holidayProvider(array $profiles): HolidayProviderInterface
-    {
-        $driver = config('workdays.storage.driver', 'config');
-
-        if (! is_string($driver) || $driver === '') {
-            throw new InvalidArgumentException('The workdays storage.driver config value must be a non-empty string.');
-        }
-
-        $configProvider = new ConfigHolidayProvider($profiles);
-
-        return match ($driver) {
-            StorageDriver::CONFIG => $configProvider,
-            StorageDriver::DATABASE => new DatabaseHolidayProvider,
-            StorageDriver::CHAIN => new ChainHolidayProvider($configProvider, new DatabaseHolidayProvider),
-            default => throw new InvalidArgumentException(StorageDriver::unsupportedMessage($driver)),
-        };
+        return $context->calculator($context->defaultProfile());
     }
 }

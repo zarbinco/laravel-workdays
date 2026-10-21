@@ -5,23 +5,24 @@ declare(strict_types=1);
 namespace Zarbinco\LaravelWorkdays\Holidays;
 
 use Carbon\CarbonImmutable;
+use Closure;
 use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Data\Holiday;
 use Zarbinco\LaravelWorkdays\Support\HolidayKeyValidator;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
-use Zarbinco\LaravelWorkdays\Support\WorkingHours;
 
-final class ConfigHolidayProvider implements HolidayProviderInterface
+final class LogicalHolidayProvider implements HolidayProviderInterface
 {
     /** @var array<string, array<string, mixed>> */
-    private array $validatedScheduleProfiles = [];
+    private array $validatedProfiles = [];
 
-    /**
-     * @param  array<string, array<string, mixed>>  $profiles
-     */
-    public function __construct(
-        private readonly array $profiles,
-    ) {}
+    private readonly Closure $resolveProfile;
+
+    /** @param callable(string): array $resolveProfile Effective logical definitions under selected identity. */
+    public function __construct(callable $resolveProfile, private readonly string $source = 'config')
+    {
+        $this->resolveProfile = Closure::fromCallable($resolveProfile);
+    }
 
     public function recurringHolidays(string $profile, string $calendar): array
     {
@@ -75,7 +76,7 @@ final class ConfigHolidayProvider implements HolidayProviderInterface
         return new Holiday(
             date: $date,
             name: is_string($customHolidays[$key]) ? $customHolidays[$key] : null,
-            source: 'config',
+            source: $this->source,
         );
     }
 
@@ -101,7 +102,7 @@ final class ConfigHolidayProvider implements HolidayProviderInterface
         return new Holiday(
             date: $date,
             name: is_string($extraWorkingDays[$key]) ? $extraWorkingDays[$key] : null,
-            source: 'config',
+            source: $this->source,
         );
     }
 
@@ -110,17 +111,6 @@ final class ConfigHolidayProvider implements HolidayProviderInterface
      */
     private function profileConfig(string $profile): array
     {
-        if (! array_key_exists($profile, $this->profiles)) {
-            throw new InvalidArgumentException(sprintf('Workdays profile [%s] is not configured.', $profile));
-        }
-
-        $config = $this->profiles[$profile];
-
-        if (is_array($config) && WorkingHours::hasEnhancedConfig($config)) {
-            // Only immutable profile-definition validation is memoized, never calendar answers.
-            return $this->validatedScheduleProfiles[$profile] ??= ProfileConfigValidator::validate($profile, $config);
-        }
-
-        return ProfileConfigValidator::validate($profile, $config);
+        return $this->validatedProfiles[$profile] ??= ProfileConfigValidator::validate($profile, ($this->resolveProfile)($profile));
     }
 }

@@ -1,0 +1,1954 @@
+{
+    "day": {
+        "type": "bool",
+        "value": false
+    },
+    "windows": {
+        "type": "array",
+        "value": [
+            {
+                "type": "Zarbinco\\LaravelWorkdays\\Data\\TimeWindow",
+                "value": {
+                    "start": "09:00",
+                    "end": "12:00"
+                }
+            }
+        ]
+    },
+    "days": {
+        "type": "Carbon\\CarbonImmutable",
+        "value": "2026-11-06T00:00:00.000000+00:00"
+    },
+    "minutes": {
+        "type": "Carbon\\CarbonImmutable",
+        "value": "2026-11-02T14:30:12.123456+00:00"
+    },
+    "cutoff": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\CutoffResult",
+        "value": {
+            "profile": "warehouse",
+            "timezone": "UTC",
+            "received_at": "2026-11-02T14:00:00.000000+00:00",
+            "cutoff_at": "2026-11-02T14:00:00.000000+00:00",
+            "effective_business_date": "2026-11-04",
+            "same_day_eligible": false,
+            "reason": "cutoff_reached"
+        }
+    },
+    "plan": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\DeliveryPlanResult",
+        "value": {
+            "timezone": "UTC",
+            "received_at": "2026-11-02T10:00:12.123456+00:00",
+            "planning_start_at": "2026-11-02T10:00:12.123456+00:00",
+            "cutoff_result": {
+                "profile": "warehouse",
+                "timezone": "UTC",
+                "received_at": "2026-11-02T10:00:12.123456+00:00",
+                "cutoff_at": "2026-11-02T14:00:00.000000+00:00",
+                "effective_business_date": "2026-11-02",
+                "same_day_eligible": true,
+                "reason": "before_cutoff"
+            },
+            "stages": [
+                {
+                    "id": "prepare",
+                    "type": "work",
+                    "profiles": [
+                        "warehouse"
+                    ],
+                    "ready_at": "2026-11-02T10:00:12.123456+00:00",
+                    "started_at": "2026-11-02T10:00:12.123456+00:00",
+                    "completed_at": "2026-11-02T13:00:12.123456+00:00"
+                },
+                {
+                    "id": "pickup",
+                    "type": "handoff",
+                    "profiles": [
+                        "warehouse",
+                        "carrier"
+                    ],
+                    "ready_at": "2026-11-02T13:00:12.123456+00:00",
+                    "started_at": "2026-11-02T13:00:12.123456+00:00",
+                    "completed_at": "2026-11-02T13:00:12.123456+00:00"
+                },
+                {
+                    "id": "deliver",
+                    "type": "work",
+                    "profiles": [
+                        "carrier"
+                    ],
+                    "ready_at": "2026-11-02T13:00:12.123456+00:00",
+                    "started_at": "2026-11-02T13:00:12.123456+00:00",
+                    "completed_at": "2026-11-02T14:00:12.123456+00:00"
+                }
+            ],
+            "estimated_completion_at": "2026-11-02T14:00:12.123456+00:00"
+        }
+    },
+    "slots": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\DeliverySlotsResult",
+        "value": {
+            "profile": "warehouse",
+            "timezone": "UTC",
+            "ready_at": "2026-11-02T10:30:12.123456+00:00",
+            "eligible_from_at": "2026-11-02T10:30:12.123456+00:00",
+            "requested_days": 3,
+            "slots": [
+                {
+                    "starts_at": "2026-11-02T11:00:00.000000+00:00",
+                    "ends_at": "2026-11-02T12:00:00.000000+00:00",
+                    "local_starts_at": "2026-11-02T11:00:00.000000+00:00",
+                    "local_ends_at": "2026-11-02T12:00:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-02T13:00:00.000000+00:00",
+                    "ends_at": "2026-11-02T14:00:00.000000+00:00",
+                    "local_starts_at": "2026-11-02T13:00:00.000000+00:00",
+                    "local_ends_at": "2026-11-02T14:00:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-02T13:30:00.000000+00:00",
+                    "ends_at": "2026-11-02T14:30:00.000000+00:00",
+                    "local_starts_at": "2026-11-02T13:30:00.000000+00:00",
+                    "local_ends_at": "2026-11-02T14:30:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-02T14:00:00.000000+00:00",
+                    "ends_at": "2026-11-02T15:00:00.000000+00:00",
+                    "local_starts_at": "2026-11-02T14:00:00.000000+00:00",
+                    "local_ends_at": "2026-11-02T15:00:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-02T14:30:00.000000+00:00",
+                    "ends_at": "2026-11-02T15:30:00.000000+00:00",
+                    "local_starts_at": "2026-11-02T14:30:00.000000+00:00",
+                    "local_ends_at": "2026-11-02T15:30:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-02T15:00:00.000000+00:00",
+                    "ends_at": "2026-11-02T16:00:00.000000+00:00",
+                    "local_starts_at": "2026-11-02T15:00:00.000000+00:00",
+                    "local_ends_at": "2026-11-02T16:00:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-02T15:30:00.000000+00:00",
+                    "ends_at": "2026-11-02T16:30:00.000000+00:00",
+                    "local_starts_at": "2026-11-02T15:30:00.000000+00:00",
+                    "local_ends_at": "2026-11-02T16:30:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-02T16:00:00.000000+00:00",
+                    "ends_at": "2026-11-02T17:00:00.000000+00:00",
+                    "local_starts_at": "2026-11-02T16:00:00.000000+00:00",
+                    "local_ends_at": "2026-11-02T17:00:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-04T09:00:00.000000+00:00",
+                    "ends_at": "2026-11-04T10:00:00.000000+00:00",
+                    "local_starts_at": "2026-11-04T09:00:00.000000+00:00",
+                    "local_ends_at": "2026-11-04T10:00:00.000000+00:00"
+                },
+                {
+                    "starts_at": "2026-11-04T09:30:00.000000+00:00",
+                    "ends_at": "2026-11-04T10:30:00.000000+00:00",
+                    "local_starts_at": "2026-11-04T09:30:00.000000+00:00",
+                    "local_ends_at": "2026-11-04T10:30:00.000000+00:00"
+                }
+            ]
+        }
+    },
+    "recurrence": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\RecurringScheduleResult",
+        "value": {
+            "profile": "child",
+            "timezone": "UTC",
+            "calendar": "gregorian",
+            "frequency": "weekly",
+            "interval": 1,
+            "anchor_date": "2026-11-02",
+            "requested_count": 3,
+            "occurrences": [
+                {
+                    "cycle_index": 0,
+                    "nominal_period": "2026-11-02",
+                    "nominal_date": "2026-11-02",
+                    "scheduled_date": "2026-11-02",
+                    "status": "scheduled",
+                    "reason": "business_day",
+                    "shift_days": 0,
+                    "collides": false
+                },
+                {
+                    "cycle_index": 1,
+                    "nominal_period": "2026-11-09",
+                    "nominal_date": "2026-11-09",
+                    "scheduled_date": "2026-11-09",
+                    "status": "scheduled",
+                    "reason": "business_day",
+                    "shift_days": 0,
+                    "collides": false
+                },
+                {
+                    "cycle_index": 2,
+                    "nominal_period": "2026-11-16",
+                    "nominal_date": "2026-11-16",
+                    "scheduled_date": "2026-11-16",
+                    "status": "scheduled",
+                    "reason": "business_day",
+                    "shift_days": 0,
+                    "collides": false
+                }
+            ]
+        }
+    },
+    "sla": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\SlaResult",
+        "value": {
+            "profile": "warehouse",
+            "timezone": "UTC",
+            "started_at": "2026-11-02T11:30:12.123456+00:00",
+            "evaluated_at": "2026-11-04T10:00:12.654321+00:00",
+            "target_minutes": 180,
+            "consumed_working_minutes": 270,
+            "paused_working_minutes": 60,
+            "remaining_working_minutes": 0,
+            "overdue_working_minutes": 90,
+            "due_at": "2026-11-02T16:30:12.123456+00:00",
+            "paused": false,
+            "breached": true,
+            "status": "breached"
+        }
+    },
+    "reverse": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\ReverseDeliveryPlanResult",
+        "value": {
+            "timezone": "UTC",
+            "target_completion_at": "2026-11-04T16:00:12.654321+00:00",
+            "search_start_at": "2026-11-01T00:00:00.000000+00:00",
+            "feasible": true,
+            "latest_order_at": "2026-11-04T13:00:12.654321+00:00",
+            "planning_start_at": "2026-11-04T13:00:12.654321+00:00",
+            "first_stage_starts_at": "2026-11-04T13:00:12.654321+00:00",
+            "estimated_completion_at": "2026-11-04T16:00:12.654321+00:00",
+            "slack_microseconds": 0,
+            "forward_result": {
+                "timezone": "UTC",
+                "received_at": "2026-11-04T13:00:12.654321+00:00",
+                "planning_start_at": "2026-11-04T13:00:12.654321+00:00",
+                "cutoff_result": {
+                    "profile": "warehouse",
+                    "timezone": "UTC",
+                    "received_at": "2026-11-04T13:00:12.654321+00:00",
+                    "cutoff_at": "2026-11-04T14:00:00.000000+00:00",
+                    "effective_business_date": "2026-11-04",
+                    "same_day_eligible": true,
+                    "reason": "before_cutoff"
+                },
+                "stages": [
+                    {
+                        "id": "prepare",
+                        "type": "work",
+                        "profiles": [
+                            "warehouse"
+                        ],
+                        "ready_at": "2026-11-04T13:00:12.654321+00:00",
+                        "started_at": "2026-11-04T13:00:12.654321+00:00",
+                        "completed_at": "2026-11-04T15:00:12.654321+00:00"
+                    },
+                    {
+                        "id": "pickup",
+                        "type": "handoff",
+                        "profiles": [
+                            "warehouse",
+                            "carrier"
+                        ],
+                        "ready_at": "2026-11-04T15:00:12.654321+00:00",
+                        "started_at": "2026-11-04T15:00:12.654321+00:00",
+                        "completed_at": "2026-11-04T15:00:12.654321+00:00"
+                    },
+                    {
+                        "id": "deliver",
+                        "type": "work",
+                        "profiles": [
+                            "carrier"
+                        ],
+                        "ready_at": "2026-11-04T15:00:12.654321+00:00",
+                        "started_at": "2026-11-04T15:00:12.654321+00:00",
+                        "completed_at": "2026-11-04T16:00:12.654321+00:00"
+                    }
+                ],
+                "estimated_completion_at": "2026-11-04T16:00:12.654321+00:00"
+            }
+        }
+    },
+    "routing": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\ResolvedProfile",
+        "value": {
+            "profile": "child",
+            "source": "rule",
+            "rule_id": "support"
+        }
+    },
+    "routed_holiday": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\DayInfo",
+        "value": {
+            "date": "2026-11-03",
+            "profile": "child",
+            "is_business_day": false,
+            "is_non_working_day": true,
+            "is_weekend": false,
+            "is_calendar_holiday": false,
+            "is_gregorian_holiday": false,
+            "is_jalali_holiday": false,
+            "is_hijri_holiday": false,
+            "is_custom_holiday": true,
+            "is_extra_working_day": false,
+            "reasons": [
+                {
+                    "type": "custom_holiday",
+                    "title": "Shared closure",
+                    "source": "config",
+                    "calendar": null,
+                    "key": "2026-11-03",
+                    "overridden": false,
+                    "overridden_by": null
+                }
+            ]
+        }
+    },
+    "bulk": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\BulkCalculationResult",
+        "value": {
+            "total": 10,
+            "succeeded": 10,
+            "failed": 0,
+            "items": [
+                {
+                    "id": "day",
+                    "operation": "is_business_day",
+                    "success": true,
+                    "result": false,
+                    "error": null
+                },
+                {
+                    "id": "windows",
+                    "operation": "working_windows",
+                    "success": true,
+                    "result": [
+                        {
+                            "start": "09:00",
+                            "end": "12:00"
+                        }
+                    ],
+                    "error": null
+                },
+                {
+                    "id": "days",
+                    "operation": "add_business_days",
+                    "success": true,
+                    "result": "2026-11-06T00:00:00.000000+00:00",
+                    "error": null
+                },
+                {
+                    "id": "minutes",
+                    "operation": "add_business_minutes",
+                    "success": true,
+                    "result": "2026-11-02T14:30:12.123456+00:00",
+                    "error": null
+                },
+                {
+                    "id": "cutoff",
+                    "operation": "resolve_cutoff",
+                    "success": true,
+                    "result": {
+                        "profile": "warehouse",
+                        "timezone": "UTC",
+                        "received_at": "2026-11-02T14:00:00.000000+00:00",
+                        "cutoff_at": "2026-11-02T14:00:00.000000+00:00",
+                        "effective_business_date": "2026-11-04",
+                        "same_day_eligible": false,
+                        "reason": "cutoff_reached"
+                    },
+                    "error": null
+                },
+                {
+                    "id": "plan",
+                    "operation": "plan_delivery",
+                    "success": true,
+                    "result": {
+                        "timezone": "UTC",
+                        "received_at": "2026-11-02T10:00:12.123456+00:00",
+                        "planning_start_at": "2026-11-02T10:00:12.123456+00:00",
+                        "cutoff_result": {
+                            "profile": "warehouse",
+                            "timezone": "UTC",
+                            "received_at": "2026-11-02T10:00:12.123456+00:00",
+                            "cutoff_at": "2026-11-02T14:00:00.000000+00:00",
+                            "effective_business_date": "2026-11-02",
+                            "same_day_eligible": true,
+                            "reason": "before_cutoff"
+                        },
+                        "stages": [
+                            {
+                                "id": "prepare",
+                                "type": "work",
+                                "profiles": [
+                                    "warehouse"
+                                ],
+                                "ready_at": "2026-11-02T10:00:12.123456+00:00",
+                                "started_at": "2026-11-02T10:00:12.123456+00:00",
+                                "completed_at": "2026-11-02T13:00:12.123456+00:00"
+                            },
+                            {
+                                "id": "pickup",
+                                "type": "handoff",
+                                "profiles": [
+                                    "warehouse",
+                                    "carrier"
+                                ],
+                                "ready_at": "2026-11-02T13:00:12.123456+00:00",
+                                "started_at": "2026-11-02T13:00:12.123456+00:00",
+                                "completed_at": "2026-11-02T13:00:12.123456+00:00"
+                            },
+                            {
+                                "id": "deliver",
+                                "type": "work",
+                                "profiles": [
+                                    "carrier"
+                                ],
+                                "ready_at": "2026-11-02T13:00:12.123456+00:00",
+                                "started_at": "2026-11-02T13:00:12.123456+00:00",
+                                "completed_at": "2026-11-02T14:00:12.123456+00:00"
+                            }
+                        ],
+                        "estimated_completion_at": "2026-11-02T14:00:12.123456+00:00"
+                    },
+                    "error": null
+                },
+                {
+                    "id": "slots",
+                    "operation": "delivery_slots",
+                    "success": true,
+                    "result": {
+                        "profile": "warehouse",
+                        "timezone": "UTC",
+                        "ready_at": "2026-11-02T10:30:12.123456+00:00",
+                        "eligible_from_at": "2026-11-02T10:30:12.123456+00:00",
+                        "requested_days": 3,
+                        "slots": [
+                            {
+                                "starts_at": "2026-11-02T11:00:00.000000+00:00",
+                                "ends_at": "2026-11-02T12:00:00.000000+00:00",
+                                "local_starts_at": "2026-11-02T11:00:00.000000+00:00",
+                                "local_ends_at": "2026-11-02T12:00:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-02T13:00:00.000000+00:00",
+                                "ends_at": "2026-11-02T14:00:00.000000+00:00",
+                                "local_starts_at": "2026-11-02T13:00:00.000000+00:00",
+                                "local_ends_at": "2026-11-02T14:00:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-02T13:30:00.000000+00:00",
+                                "ends_at": "2026-11-02T14:30:00.000000+00:00",
+                                "local_starts_at": "2026-11-02T13:30:00.000000+00:00",
+                                "local_ends_at": "2026-11-02T14:30:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-02T14:00:00.000000+00:00",
+                                "ends_at": "2026-11-02T15:00:00.000000+00:00",
+                                "local_starts_at": "2026-11-02T14:00:00.000000+00:00",
+                                "local_ends_at": "2026-11-02T15:00:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-02T14:30:00.000000+00:00",
+                                "ends_at": "2026-11-02T15:30:00.000000+00:00",
+                                "local_starts_at": "2026-11-02T14:30:00.000000+00:00",
+                                "local_ends_at": "2026-11-02T15:30:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-02T15:00:00.000000+00:00",
+                                "ends_at": "2026-11-02T16:00:00.000000+00:00",
+                                "local_starts_at": "2026-11-02T15:00:00.000000+00:00",
+                                "local_ends_at": "2026-11-02T16:00:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-02T15:30:00.000000+00:00",
+                                "ends_at": "2026-11-02T16:30:00.000000+00:00",
+                                "local_starts_at": "2026-11-02T15:30:00.000000+00:00",
+                                "local_ends_at": "2026-11-02T16:30:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-02T16:00:00.000000+00:00",
+                                "ends_at": "2026-11-02T17:00:00.000000+00:00",
+                                "local_starts_at": "2026-11-02T16:00:00.000000+00:00",
+                                "local_ends_at": "2026-11-02T17:00:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-04T09:00:00.000000+00:00",
+                                "ends_at": "2026-11-04T10:00:00.000000+00:00",
+                                "local_starts_at": "2026-11-04T09:00:00.000000+00:00",
+                                "local_ends_at": "2026-11-04T10:00:00.000000+00:00"
+                            },
+                            {
+                                "starts_at": "2026-11-04T09:30:00.000000+00:00",
+                                "ends_at": "2026-11-04T10:30:00.000000+00:00",
+                                "local_starts_at": "2026-11-04T09:30:00.000000+00:00",
+                                "local_ends_at": "2026-11-04T10:30:00.000000+00:00"
+                            }
+                        ]
+                    },
+                    "error": null
+                },
+                {
+                    "id": "recurrence",
+                    "operation": "recurring_schedule",
+                    "success": true,
+                    "result": {
+                        "profile": "child",
+                        "timezone": "UTC",
+                        "calendar": "gregorian",
+                        "frequency": "weekly",
+                        "interval": 1,
+                        "anchor_date": "2026-11-02",
+                        "requested_count": 3,
+                        "occurrences": [
+                            {
+                                "cycle_index": 0,
+                                "nominal_period": "2026-11-02",
+                                "nominal_date": "2026-11-02",
+                                "scheduled_date": "2026-11-02",
+                                "status": "scheduled",
+                                "reason": "business_day",
+                                "shift_days": 0,
+                                "collides": false
+                            },
+                            {
+                                "cycle_index": 1,
+                                "nominal_period": "2026-11-09",
+                                "nominal_date": "2026-11-09",
+                                "scheduled_date": "2026-11-09",
+                                "status": "scheduled",
+                                "reason": "business_day",
+                                "shift_days": 0,
+                                "collides": false
+                            },
+                            {
+                                "cycle_index": 2,
+                                "nominal_period": "2026-11-16",
+                                "nominal_date": "2026-11-16",
+                                "scheduled_date": "2026-11-16",
+                                "status": "scheduled",
+                                "reason": "business_day",
+                                "shift_days": 0,
+                                "collides": false
+                            }
+                        ]
+                    },
+                    "error": null
+                },
+                {
+                    "id": "sla",
+                    "operation": "evaluate_sla",
+                    "success": true,
+                    "result": {
+                        "profile": "warehouse",
+                        "timezone": "UTC",
+                        "started_at": "2026-11-02T11:30:12.123456+00:00",
+                        "evaluated_at": "2026-11-04T10:00:12.654321+00:00",
+                        "target_minutes": 180,
+                        "consumed_working_minutes": 270,
+                        "paused_working_minutes": 60,
+                        "remaining_working_minutes": 0,
+                        "overdue_working_minutes": 90,
+                        "due_at": "2026-11-02T16:30:12.123456+00:00",
+                        "paused": false,
+                        "breached": true,
+                        "status": "breached"
+                    },
+                    "error": null
+                },
+                {
+                    "id": "reverse",
+                    "operation": "reverse_plan_delivery",
+                    "success": true,
+                    "result": {
+                        "timezone": "UTC",
+                        "target_completion_at": "2026-11-04T16:00:12.654321+00:00",
+                        "search_start_at": "2026-11-01T00:00:00.000000+00:00",
+                        "feasible": true,
+                        "latest_order_at": "2026-11-04T13:00:12.654321+00:00",
+                        "planning_start_at": "2026-11-04T13:00:12.654321+00:00",
+                        "first_stage_starts_at": "2026-11-04T13:00:12.654321+00:00",
+                        "estimated_completion_at": "2026-11-04T16:00:12.654321+00:00",
+                        "slack_microseconds": 0,
+                        "forward_result": {
+                            "timezone": "UTC",
+                            "received_at": "2026-11-04T13:00:12.654321+00:00",
+                            "planning_start_at": "2026-11-04T13:00:12.654321+00:00",
+                            "cutoff_result": {
+                                "profile": "warehouse",
+                                "timezone": "UTC",
+                                "received_at": "2026-11-04T13:00:12.654321+00:00",
+                                "cutoff_at": "2026-11-04T14:00:00.000000+00:00",
+                                "effective_business_date": "2026-11-04",
+                                "same_day_eligible": true,
+                                "reason": "before_cutoff"
+                            },
+                            "stages": [
+                                {
+                                    "id": "prepare",
+                                    "type": "work",
+                                    "profiles": [
+                                        "warehouse"
+                                    ],
+                                    "ready_at": "2026-11-04T13:00:12.654321+00:00",
+                                    "started_at": "2026-11-04T13:00:12.654321+00:00",
+                                    "completed_at": "2026-11-04T15:00:12.654321+00:00"
+                                },
+                                {
+                                    "id": "pickup",
+                                    "type": "handoff",
+                                    "profiles": [
+                                        "warehouse",
+                                        "carrier"
+                                    ],
+                                    "ready_at": "2026-11-04T15:00:12.654321+00:00",
+                                    "started_at": "2026-11-04T15:00:12.654321+00:00",
+                                    "completed_at": "2026-11-04T15:00:12.654321+00:00"
+                                },
+                                {
+                                    "id": "deliver",
+                                    "type": "work",
+                                    "profiles": [
+                                        "carrier"
+                                    ],
+                                    "ready_at": "2026-11-04T15:00:12.654321+00:00",
+                                    "started_at": "2026-11-04T15:00:12.654321+00:00",
+                                    "completed_at": "2026-11-04T16:00:12.654321+00:00"
+                                }
+                            ],
+                            "estimated_completion_at": "2026-11-04T16:00:12.654321+00:00"
+                        }
+                    },
+                    "error": null
+                }
+            ]
+        }
+    },
+    "night": {
+        "type": "Carbon\\CarbonImmutable",
+        "value": "2026-11-03T01:45:12.123456+00:00"
+    },
+    "fold": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\SlaResult",
+        "value": {
+            "profile": "fold",
+            "timezone": "America/New_York",
+            "started_at": "2026-11-01T04:00:00.000000+00:00",
+            "evaluated_at": "2026-11-01T08:00:00.000000+00:00",
+            "target_minutes": 180,
+            "consumed_working_minutes": 240,
+            "paused_working_minutes": 0,
+            "remaining_working_minutes": 0,
+            "overdue_working_minutes": 60,
+            "due_at": "2026-11-01T07:00:00.000000+00:00",
+            "paused": false,
+            "breached": true,
+            "status": "breached"
+        }
+    },
+    "snapshot": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\DeliveryPromiseSnapshot",
+        "value": {
+            "schema_version": 1,
+            "calendar_version": "8d228c03004aaad097112e10de859f995ff1e98736fc9ce2c050dc906960896f",
+            "received_at": "2026-11-02T10:00:12.123456+00:00",
+            "plan": {
+                "cutoff_profile": "warehouse",
+                "profile_timezones": {
+                    "carrier": "UTC",
+                    "warehouse": "UTC"
+                },
+                "stages": [
+                    {
+                        "id": "prepare",
+                        "minutes": 120,
+                        "profile": "warehouse",
+                        "type": "work"
+                    },
+                    {
+                        "id": "pickup",
+                        "profiles": [
+                            "warehouse",
+                            "carrier"
+                        ],
+                        "type": "handoff"
+                    },
+                    {
+                        "id": "deliver",
+                        "minutes": 60,
+                        "profile": "carrier",
+                        "type": "work"
+                    }
+                ],
+                "timezone": "UTC"
+            },
+            "horizon_days": 3,
+            "original_result": {
+                "timezone": "UTC",
+                "received_at": "2026-11-02T10:00:12.123456+00:00",
+                "planning_start_at": "2026-11-02T10:00:12.123456+00:00",
+                "cutoff_result": {
+                    "profile": "warehouse",
+                    "timezone": "UTC",
+                    "received_at": "2026-11-02T10:00:12.123456+00:00",
+                    "cutoff_at": "2026-11-02T14:00:00.000000+00:00",
+                    "effective_business_date": "2026-11-02",
+                    "same_day_eligible": true,
+                    "reason": "before_cutoff"
+                },
+                "stages": [
+                    {
+                        "id": "prepare",
+                        "type": "work",
+                        "profiles": [
+                            "warehouse"
+                        ],
+                        "ready_at": "2026-11-02T10:00:12.123456+00:00",
+                        "started_at": "2026-11-02T10:00:12.123456+00:00",
+                        "completed_at": "2026-11-02T13:00:12.123456+00:00"
+                    },
+                    {
+                        "id": "pickup",
+                        "type": "handoff",
+                        "profiles": [
+                            "warehouse",
+                            "carrier"
+                        ],
+                        "ready_at": "2026-11-02T13:00:12.123456+00:00",
+                        "started_at": "2026-11-02T13:00:12.123456+00:00",
+                        "completed_at": "2026-11-02T13:00:12.123456+00:00"
+                    },
+                    {
+                        "id": "deliver",
+                        "type": "work",
+                        "profiles": [
+                            "carrier"
+                        ],
+                        "ready_at": "2026-11-02T13:00:12.123456+00:00",
+                        "started_at": "2026-11-02T13:00:12.123456+00:00",
+                        "completed_at": "2026-11-02T14:00:12.123456+00:00"
+                    }
+                ],
+                "estimated_completion_at": "2026-11-02T14:00:12.123456+00:00"
+            },
+            "calendar_evidence": {
+                "anchor_date": "2026-11-02",
+                "hijri": {
+                    "adjustment": 0,
+                    "method": "mathematical"
+                },
+                "horizon_days": 3,
+                "plan_timezone": "UTC",
+                "profiles": {
+                    "carrier": {
+                        "config": {
+                            "extra_working_day_hours": [
+                                [
+                                    "09:00",
+                                    "17:00"
+                                ]
+                            ],
+                            "weekends": [
+                                6,
+                                7
+                            ],
+                            "working_hours": {
+                                "1": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ],
+                                "2": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ],
+                                "3": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ],
+                                "4": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ],
+                                "5": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ]
+                            }
+                        },
+                        "coverage": {
+                            "from": "2026-10-31",
+                            "provider_from": "2026-10-30",
+                            "through": "2026-11-08"
+                        },
+                        "days": [
+                            {
+                                "date": "2026-10-31",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-01",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-02",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-02T18:00:00.000000+00:00",
+                                        "start": "2026-11-02T12:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-03",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": "2026-11-03",
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "config",
+                                        "title": "Shared closure",
+                                        "type": "custom_holiday"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-04",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-04T18:00:00.000000+00:00",
+                                        "start": "2026-11-04T12:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-05",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-05T18:00:00.000000+00:00",
+                                        "start": "2026-11-05T12:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-06",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-06T18:00:00.000000+00:00",
+                                        "start": "2026-11-06T12:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-07",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-07T17:00:00.000000+00:00",
+                                        "start": "2026-11-07T09:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": true,
+                                        "overridden_by": "extra_working_day",
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    },
+                                    {
+                                        "calendar": null,
+                                        "key": "2026-11-07",
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "config",
+                                        "title": "Extra Saturday",
+                                        "type": "extra_working_day"
+                                    }
+                                ],
+                                "is_business_day": true,
+                                "is_extra_working_day": true,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-08",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "carrier"
+                            }
+                        ],
+                        "holiday_inputs": {
+                            "custom": {
+                                "2026-11-03": {
+                                    "source": "config",
+                                    "title": "Shared closure"
+                                }
+                            },
+                            "extra": {
+                                "2026-11-07": {
+                                    "source": "config",
+                                    "title": "Extra Saturday"
+                                }
+                            },
+                            "recurring": {
+                                "gregorian": [],
+                                "hijri": [],
+                                "jalali": []
+                            }
+                        },
+                        "needs_working_hours": true,
+                        "timezone": "UTC"
+                    },
+                    "warehouse": {
+                        "config": {
+                            "cutoff": {
+                                "time": "14:00",
+                                "timezone": "UTC",
+                                "weekdays": []
+                            },
+                            "extra_working_day_hours": [
+                                [
+                                    "09:00",
+                                    "17:00"
+                                ]
+                            ],
+                            "weekends": [
+                                6,
+                                7
+                            ],
+                            "working_hours": {
+                                "1": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ],
+                                "2": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ],
+                                "3": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ],
+                                "4": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ],
+                                "5": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ]
+                            }
+                        },
+                        "coverage": {
+                            "from": "2026-10-31",
+                            "provider_from": "2026-10-30",
+                            "through": "2026-11-08"
+                        },
+                        "days": [
+                            {
+                                "date": "2026-10-31",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-01",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-02",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-02T12:00:00.000000+00:00",
+                                        "start": "2026-11-02T09:00:00.000000+00:00"
+                                    },
+                                    {
+                                        "end": "2026-11-02T17:00:00.000000+00:00",
+                                        "start": "2026-11-02T13:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-03",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": "2026-11-03",
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "config",
+                                        "title": "Shared closure",
+                                        "type": "custom_holiday"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-04",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-04T12:00:00.000000+00:00",
+                                        "start": "2026-11-04T09:00:00.000000+00:00"
+                                    },
+                                    {
+                                        "end": "2026-11-04T17:00:00.000000+00:00",
+                                        "start": "2026-11-04T13:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-05",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-05T12:00:00.000000+00:00",
+                                        "start": "2026-11-05T09:00:00.000000+00:00"
+                                    },
+                                    {
+                                        "end": "2026-11-05T17:00:00.000000+00:00",
+                                        "start": "2026-11-05T13:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-06",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-06T12:00:00.000000+00:00",
+                                        "start": "2026-11-06T09:00:00.000000+00:00"
+                                    },
+                                    {
+                                        "end": "2026-11-06T17:00:00.000000+00:00",
+                                        "start": "2026-11-06T13:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-07",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-07T17:00:00.000000+00:00",
+                                        "start": "2026-11-07T09:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": true,
+                                        "overridden_by": "extra_working_day",
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    },
+                                    {
+                                        "calendar": null,
+                                        "key": "2026-11-07",
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "config",
+                                        "title": "Extra Saturday",
+                                        "type": "extra_working_day"
+                                    }
+                                ],
+                                "is_business_day": true,
+                                "is_extra_working_day": true,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-08",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "warehouse"
+                            }
+                        ],
+                        "holiday_inputs": {
+                            "custom": {
+                                "2026-11-03": {
+                                    "source": "config",
+                                    "title": "Shared closure"
+                                }
+                            },
+                            "extra": {
+                                "2026-11-07": {
+                                    "source": "config",
+                                    "title": "Extra Saturday"
+                                }
+                            },
+                            "recurring": {
+                                "gregorian": [],
+                                "hijri": [],
+                                "jalali": []
+                            }
+                        },
+                        "needs_working_hours": true,
+                        "timezone": "UTC"
+                    }
+                },
+                "schema_version": 1
+            }
+        }
+    },
+    "restore": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\DeliveryPromiseSnapshot",
+        "value": {
+            "schema_version": 1,
+            "calendar_version": "8d228c03004aaad097112e10de859f995ff1e98736fc9ce2c050dc906960896f",
+            "received_at": "2026-11-02T10:00:12.123456+00:00",
+            "plan": {
+                "cutoff_profile": "warehouse",
+                "profile_timezones": {
+                    "carrier": "UTC",
+                    "warehouse": "UTC"
+                },
+                "stages": [
+                    {
+                        "id": "prepare",
+                        "minutes": 120,
+                        "profile": "warehouse",
+                        "type": "work"
+                    },
+                    {
+                        "id": "pickup",
+                        "profiles": [
+                            "warehouse",
+                            "carrier"
+                        ],
+                        "type": "handoff"
+                    },
+                    {
+                        "id": "deliver",
+                        "minutes": 60,
+                        "profile": "carrier",
+                        "type": "work"
+                    }
+                ],
+                "timezone": "UTC"
+            },
+            "horizon_days": 3,
+            "original_result": {
+                "timezone": "UTC",
+                "received_at": "2026-11-02T10:00:12.123456+00:00",
+                "planning_start_at": "2026-11-02T10:00:12.123456+00:00",
+                "cutoff_result": {
+                    "profile": "warehouse",
+                    "timezone": "UTC",
+                    "received_at": "2026-11-02T10:00:12.123456+00:00",
+                    "cutoff_at": "2026-11-02T14:00:00.000000+00:00",
+                    "effective_business_date": "2026-11-02",
+                    "same_day_eligible": true,
+                    "reason": "before_cutoff"
+                },
+                "stages": [
+                    {
+                        "id": "prepare",
+                        "type": "work",
+                        "profiles": [
+                            "warehouse"
+                        ],
+                        "ready_at": "2026-11-02T10:00:12.123456+00:00",
+                        "started_at": "2026-11-02T10:00:12.123456+00:00",
+                        "completed_at": "2026-11-02T13:00:12.123456+00:00"
+                    },
+                    {
+                        "id": "pickup",
+                        "type": "handoff",
+                        "profiles": [
+                            "warehouse",
+                            "carrier"
+                        ],
+                        "ready_at": "2026-11-02T13:00:12.123456+00:00",
+                        "started_at": "2026-11-02T13:00:12.123456+00:00",
+                        "completed_at": "2026-11-02T13:00:12.123456+00:00"
+                    },
+                    {
+                        "id": "deliver",
+                        "type": "work",
+                        "profiles": [
+                            "carrier"
+                        ],
+                        "ready_at": "2026-11-02T13:00:12.123456+00:00",
+                        "started_at": "2026-11-02T13:00:12.123456+00:00",
+                        "completed_at": "2026-11-02T14:00:12.123456+00:00"
+                    }
+                ],
+                "estimated_completion_at": "2026-11-02T14:00:12.123456+00:00"
+            },
+            "calendar_evidence": {
+                "anchor_date": "2026-11-02",
+                "hijri": {
+                    "adjustment": 0,
+                    "method": "mathematical"
+                },
+                "horizon_days": 3,
+                "plan_timezone": "UTC",
+                "profiles": {
+                    "carrier": {
+                        "config": {
+                            "extra_working_day_hours": [
+                                [
+                                    "09:00",
+                                    "17:00"
+                                ]
+                            ],
+                            "weekends": [
+                                6,
+                                7
+                            ],
+                            "working_hours": {
+                                "1": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ],
+                                "2": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ],
+                                "3": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ],
+                                "4": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ],
+                                "5": [
+                                    [
+                                        "12:00",
+                                        "18:00"
+                                    ]
+                                ]
+                            }
+                        },
+                        "coverage": {
+                            "from": "2026-10-31",
+                            "provider_from": "2026-10-30",
+                            "through": "2026-11-08"
+                        },
+                        "days": [
+                            {
+                                "date": "2026-10-31",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-01",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-02",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-02T18:00:00.000000+00:00",
+                                        "start": "2026-11-02T12:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-03",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": "2026-11-03",
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "config",
+                                        "title": "Shared closure",
+                                        "type": "custom_holiday"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-04",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-04T18:00:00.000000+00:00",
+                                        "start": "2026-11-04T12:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-05",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-05T18:00:00.000000+00:00",
+                                        "start": "2026-11-05T12:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-06",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-06T18:00:00.000000+00:00",
+                                        "start": "2026-11-06T12:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-07",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-07T17:00:00.000000+00:00",
+                                        "start": "2026-11-07T09:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": true,
+                                        "overridden_by": "extra_working_day",
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    },
+                                    {
+                                        "calendar": null,
+                                        "key": "2026-11-07",
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "config",
+                                        "title": "Extra Saturday",
+                                        "type": "extra_working_day"
+                                    }
+                                ],
+                                "is_business_day": true,
+                                "is_extra_working_day": true,
+                                "is_holiday": false,
+                                "profile": "carrier"
+                            },
+                            {
+                                "date": "2026-11-08",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "carrier"
+                            }
+                        ],
+                        "holiday_inputs": {
+                            "custom": {
+                                "2026-11-03": {
+                                    "source": "config",
+                                    "title": "Shared closure"
+                                }
+                            },
+                            "extra": {
+                                "2026-11-07": {
+                                    "source": "config",
+                                    "title": "Extra Saturday"
+                                }
+                            },
+                            "recurring": {
+                                "gregorian": [],
+                                "hijri": [],
+                                "jalali": []
+                            }
+                        },
+                        "needs_working_hours": true,
+                        "timezone": "UTC"
+                    },
+                    "warehouse": {
+                        "config": {
+                            "cutoff": {
+                                "time": "14:00",
+                                "timezone": "UTC",
+                                "weekdays": []
+                            },
+                            "extra_working_day_hours": [
+                                [
+                                    "09:00",
+                                    "17:00"
+                                ]
+                            ],
+                            "weekends": [
+                                6,
+                                7
+                            ],
+                            "working_hours": {
+                                "1": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ],
+                                "2": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ],
+                                "3": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ],
+                                "4": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ],
+                                "5": [
+                                    [
+                                        "09:00",
+                                        "12:00"
+                                    ],
+                                    [
+                                        "13:00",
+                                        "17:00"
+                                    ]
+                                ]
+                            }
+                        },
+                        "coverage": {
+                            "from": "2026-10-31",
+                            "provider_from": "2026-10-30",
+                            "through": "2026-11-08"
+                        },
+                        "days": [
+                            {
+                                "date": "2026-10-31",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-01",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-02",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-02T12:00:00.000000+00:00",
+                                        "start": "2026-11-02T09:00:00.000000+00:00"
+                                    },
+                                    {
+                                        "end": "2026-11-02T17:00:00.000000+00:00",
+                                        "start": "2026-11-02T13:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-03",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": "2026-11-03",
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "config",
+                                        "title": "Shared closure",
+                                        "type": "custom_holiday"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-04",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-04T12:00:00.000000+00:00",
+                                        "start": "2026-11-04T09:00:00.000000+00:00"
+                                    },
+                                    {
+                                        "end": "2026-11-04T17:00:00.000000+00:00",
+                                        "start": "2026-11-04T13:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-05",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-05T12:00:00.000000+00:00",
+                                        "start": "2026-11-05T09:00:00.000000+00:00"
+                                    },
+                                    {
+                                        "end": "2026-11-05T17:00:00.000000+00:00",
+                                        "start": "2026-11-05T13:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-06",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-06T12:00:00.000000+00:00",
+                                        "start": "2026-11-06T09:00:00.000000+00:00"
+                                    },
+                                    {
+                                        "end": "2026-11-06T17:00:00.000000+00:00",
+                                        "start": "2026-11-06T13:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [],
+                                "is_business_day": true,
+                                "is_extra_working_day": false,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-07",
+                                "effective_working_windows": [
+                                    {
+                                        "end": "2026-11-07T17:00:00.000000+00:00",
+                                        "start": "2026-11-07T09:00:00.000000+00:00"
+                                    }
+                                ],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": true,
+                                        "overridden_by": "extra_working_day",
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    },
+                                    {
+                                        "calendar": null,
+                                        "key": "2026-11-07",
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "config",
+                                        "title": "Extra Saturday",
+                                        "type": "extra_working_day"
+                                    }
+                                ],
+                                "is_business_day": true,
+                                "is_extra_working_day": true,
+                                "is_holiday": false,
+                                "profile": "warehouse"
+                            },
+                            {
+                                "date": "2026-11-08",
+                                "effective_working_windows": [],
+                                "exists": true,
+                                "holiday_reasons": [
+                                    {
+                                        "calendar": null,
+                                        "key": null,
+                                        "overridden": false,
+                                        "overridden_by": null,
+                                        "source": "profile",
+                                        "title": "Weekend",
+                                        "type": "weekend"
+                                    }
+                                ],
+                                "is_business_day": false,
+                                "is_extra_working_day": false,
+                                "is_holiday": true,
+                                "profile": "warehouse"
+                            }
+                        ],
+                        "holiday_inputs": {
+                            "custom": {
+                                "2026-11-03": {
+                                    "source": "config",
+                                    "title": "Shared closure"
+                                }
+                            },
+                            "extra": {
+                                "2026-11-07": {
+                                    "source": "config",
+                                    "title": "Extra Saturday"
+                                }
+                            },
+                            "recurring": {
+                                "gregorian": [],
+                                "hijri": [],
+                                "jalali": []
+                            }
+                        },
+                        "needs_working_hours": true,
+                        "timezone": "UTC"
+                    }
+                },
+                "schema_version": 1
+            }
+        }
+    },
+    "comparison": {
+        "type": "Zarbinco\\LaravelWorkdays\\Data\\DeliveryPromiseComparison",
+        "value": {
+            "status": "resolved",
+            "original_calendar_version": "8d228c03004aaad097112e10de859f995ff1e98736fc9ce2c050dc906960896f",
+            "current_calendar_version": "8d228c03004aaad097112e10de859f995ff1e98736fc9ce2c050dc906960896f",
+            "version_changed": false,
+            "estimate_changed": false,
+            "direction": "unchanged",
+            "original_estimated_completion_at": "2026-11-02T14:00:12.123456+00:00",
+            "current_estimated_completion_at": "2026-11-02T14:00:12.123456+00:00",
+            "delta_seconds": 0,
+            "changed_calendar_days": [],
+            "runtime_changed": false,
+            "error": null,
+            "configuration_changed": false,
+            "holiday_inputs_changed": false,
+            "database_rules_changed": false
+        }
+    }
+}

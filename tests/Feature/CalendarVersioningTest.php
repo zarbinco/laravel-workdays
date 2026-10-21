@@ -8,17 +8,20 @@ use Carbon\CarbonImmutable;
 use DateTime;
 use DateTimeZone;
 use Error;
-use Illuminate\Database\Events\QueryExecuted;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calendar\CalendarFingerprint;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory;
+use Zarbinco\LaravelWorkdays\Configuration\ConfigDefinitionSource;
+use Zarbinco\LaravelWorkdays\Configuration\DatabaseDefinitionRepository;
+use Zarbinco\LaravelWorkdays\Configuration\DefinitionSource;
+use Zarbinco\LaravelWorkdays\Configuration\WorkdayDefinitions;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseComparison;
 use Zarbinco\LaravelWorkdays\Data\DeliveryPromiseSnapshot;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
 
@@ -29,11 +32,11 @@ final class CalendarVersioningTest extends TestCase
         parent::setUp();
 
         config()->set('app.timezone', 'Pacific/Honolulu');
-        config()->set('workdays.default_profile', 'warehouse');
-        config()->set('workdays.storage.driver', 'config');
+        config()->set('workdays.definitions.default_profile', 'warehouse');
+        config()->set('workdays.driver', 'config');
         config()->set('workdays.max_scan_days', 31);
-        config()->set('workdays.hijri', ['method' => 'mathematical', 'adjustment' => 0]);
-        config()->set('workdays.profiles', ['warehouse' => $this->profile(), 'carrier' => $this->profile()]);
+        config()->set('workdays.definitions.hijri', ['method' => 'mathematical', 'adjustment' => 0]);
+        config()->set('workdays.definitions.profiles', ['warehouse' => $this->profile(), 'carrier' => $this->profile()]);
     }
 
     public function test_a_unchanged_calendar_keeps_version_original_result_and_estimate(): void
@@ -69,7 +72,7 @@ final class CalendarVersioningTest extends TestCase
     {
         $snapshot = $this->makeSnapshot();
         $original = $snapshot->toArray();
-        config()->set('workdays.profiles.carrier.custom_holidays', ['2026-11-03' => 'New carrier closure']);
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', ['2026-11-03' => 'New carrier closure']);
 
         $comparison = Workday::compareDeliveryPromise($original);
 
@@ -88,9 +91,9 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_c_removed_holiday_moves_delivery_earlier_with_negative_delta(): void
     {
-        config()->set('workdays.profiles.carrier.custom_holidays', ['2026-11-03' => 'Original closure']);
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', ['2026-11-03' => 'Original closure']);
         $snapshot = $this->makeSnapshot();
-        config()->set('workdays.profiles.carrier.custom_holidays', []);
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', []);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -105,7 +108,7 @@ final class CalendarVersioningTest extends TestCase
     public function test_d_changed_hours_preserve_business_date_but_change_working_evidence_and_eta(): void
     {
         $snapshot = $this->makeSnapshot($this->workPlan(120), '2026-11-02T11:00:00Z');
-        config()->set('workdays.profiles.warehouse.special_working_hours', ['2026-11-02' => [['09:00', '12:00']]]);
+        config()->set('workdays.definitions.profiles.warehouse.special_working_hours', ['2026-11-02' => [['09:00', '12:00']]]);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -120,7 +123,7 @@ final class CalendarVersioningTest extends TestCase
     public function test_e_relevant_later_date_change_can_change_version_without_moving_eta(): void
     {
         $snapshot = $this->makeSnapshot();
-        config()->set('workdays.profiles.warehouse.special_working_hours', ['2026-11-06' => [['09:00', '12:00']]]);
+        config()->set('workdays.definitions.profiles.warehouse.special_working_hours', ['2026-11-06' => [['09:00', '12:00']]]);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -134,9 +137,9 @@ final class CalendarVersioningTest extends TestCase
     public function test_unreferenced_profiles_application_metadata_and_routing_do_not_change_version(): void
     {
         $snapshot = $this->makeSnapshot();
-        config()->set('workdays.profiles.unrelated', ['extends' => 'missing_parent']);
-        config()->set('workdays.profiles.warehouse.application_label', 'An unrelated display label');
-        config()->set('workdays.profile_routing', ['invalid' => true]);
+        config()->set('workdays.definitions.profiles.unrelated', ['extends' => 'missing_parent']);
+        config()->set('workdays.definitions.profiles.warehouse.application_label', 'An unrelated display label');
+        config()->set('workdays.definitions.profile_routing', ['invalid' => true]);
         config()->set('app.name', 'A renamed application');
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
@@ -147,20 +150,19 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_dates_outside_captured_profile_coverage_are_not_hashed_or_copied(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2035-01-02' => 'Outside the snapshot']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2035-01-02' => 'Outside the snapshot']);
         $snapshot = $this->makeSnapshot();
         $this->assertStringNotContainsString('2035-01-02', json_encode($snapshot->toArray()['calendar_evidence'], JSON_THROW_ON_ERROR));
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2036-01-02' => 'A different irrelevant holiday']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2036-01-02' => 'A different irrelevant holiday']);
 
         $this->assertFalse(Workday::compareDeliveryPromise($snapshot)->versionChanged);
     }
 
-    public function test_f_database_holiday_update_changes_current_view_without_mutating_stored_snapshot(): void
+    public function test_f_logical_holiday_update_changes_current_view_without_mutating_stored_snapshot(): void
     {
-        $this->databaseStorage();
         $snapshot = $this->makeSnapshot();
         $before = $snapshot->toArray();
-        WorkdaySpecialDate::create(['profile' => 'carrier', 'date' => '2026-11-03', 'type' => 'holiday', 'title' => 'Stored new closure', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', ['2026-11-03' => 'Stored new closure']);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -168,19 +170,18 @@ final class CalendarVersioningTest extends TestCase
         $this->assertSame(86400, $comparison->deltaSeconds);
         $this->assertTrue($comparison->versionChanged);
         $this->assertSame($before, $snapshot->toArray());
-        $this->assertSame(1, WorkdaySpecialDate::count());
+        $this->assertSame('config', $this->evidenceDay($this->makeSnapshot(), 'carrier', '2026-11-03')['holiday_reasons'][0]['source']);
     }
 
-    public function test_g_chain_database_reopening_and_later_deactivation_preserve_existing_precedence(): void
+    public function test_g_logical_reopening_and_later_removal_preserve_extra_day_precedence(): void
     {
-        $this->databaseStorage('chain');
-        config()->set('workdays.profiles.carrier.custom_holidays', ['2026-11-03' => 'Config closure']);
-        $reopening = WorkdaySpecialDate::create(['profile' => 'carrier', 'date' => '2026-11-03', 'type' => 'working_day', 'title' => 'Database reopening', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', ['2026-11-03' => 'Config closure']);
+        config()->set('workdays.definitions.profiles.carrier.extra_working_days', ['2026-11-03' => 'Logical reopening']);
         $snapshot = $this->makeSnapshot();
         $day = $this->evidenceDay($snapshot, 'carrier', '2026-11-03');
         $this->assertTrue($day['is_business_day']);
         $this->assertTrue($day['is_extra_working_day']);
-        $reopening->update(['is_active' => false]);
+        config()->set('workdays.definitions.profiles.carrier.extra_working_days', []);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -189,20 +190,46 @@ final class CalendarVersioningTest extends TestCase
         $this->changedDay($comparison, 'carrier', '2026-11-03');
     }
 
-    public function test_active_database_recurring_rules_are_frozen_and_current_updates_are_observed(): void
+    public function test_recurring_logical_rules_are_frozen_and_current_updates_are_observed(): void
     {
-        $this->databaseStorage();
         $snapshot = $this->makeSnapshot();
-        WorkdayHolidayRule::create(['profile' => 'carrier', 'calendar_type' => 'gregorian', 'month' => 11, 'day' => 3, 'title' => 'Annual carrier closure', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.carrier.holidays.gregorian', ['11-03' => 'Annual carrier closure']);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
         $this->assertSame('later', $comparison->direction);
         $this->assertSame(86400, $comparison->deltaSeconds);
         $this->assertTrue($comparison->holidayInputsChanged);
-        $this->assertFalse($comparison->configurationChanged);
-        $this->assertTrue($comparison->databaseRulesChanged);
+        $this->assertTrue($comparison->configurationChanged);
+        $this->assertFalse($comparison->databaseRulesChanged);
         $this->assertSame('2026-11-03 16:00:00', $snapshot->originalResult->estimatedCompletionAt->toDateTimeString());
+    }
+
+    public function test_historical_database_labelled_evidence_restores_without_enabling_a_live_database_source(): void
+    {
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', ['2026-11-03' => 'Historical provider closure']);
+        $payload = $this->makeSnapshot()->toArray();
+        $databaseLabels = function (array $value) use (&$databaseLabels): array {
+            foreach ($value as $key => $entry) {
+                $value[$key] = is_array($entry) ? $databaseLabels($entry) : $entry;
+            }
+            if (($value['source'] ?? null) === 'config') {
+                $value['source'] = 'database';
+            }
+
+            return $value;
+        };
+        $payload['calendar_evidence'] = $databaseLabels($payload['calendar_evidence']);
+        $payload = $this->rehash($payload);
+        $restored = DeliveryPromiseSnapshot::fromArray($payload);
+
+        $this->assertSame($payload, $restored->toArray());
+        $this->assertSame('database', $restored->calendarEvidence['profiles']['carrier']['holiday_inputs']['custom']['2026-11-03']['source']);
+        $comparison = Workday::compareDeliveryPromise($restored);
+        $this->assertFalse($comparison->estimateChanged);
+        $this->assertTrue($comparison->holidayInputsChanged);
+        $this->assertTrue($comparison->databaseRulesChanged);
+        $this->assertSame('config', config('workdays.driver'));
     }
 
     public function test_runtime_metadata_drift_is_reported_separately_from_calendar_and_eta_changes(): void
@@ -248,12 +275,11 @@ final class CalendarVersioningTest extends TestCase
         $this->assertTrue(Workday::compareDeliveryPromise($restored)->runtimeChanged);
     }
 
-    public function test_fractional_eta_movement_preserves_microseconds_and_signed_delta_seconds(): void
+    public function test_fractional_eta_movement_from_changed_windows_preserves_microseconds_and_signed_delta_seconds(): void
     {
-        config()->set('workdays.profiles.warehouse.working_hours', ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]]);
-        config()->set('workdays.profiles.warehouse.allow_overnight_working_hours', false);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', ['Monday' => [['09:00', '09:59'], ['11:00', '12:00']]]);
         $snapshot = $this->makeSnapshot($this->workPlan(1), '2026-11-02T09:59:30.123456Z', 1);
-        config()->set('workdays.profiles.warehouse.allow_overnight_working_hours', true);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]]);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -266,10 +292,10 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_h_inherited_parent_change_is_observed_under_the_original_child_identity(): void
     {
-        config()->set('workdays.profiles.parent', $this->profile());
-        config()->set('workdays.profiles.warehouse', ['extends' => 'parent']);
+        config()->set('workdays.definitions.profiles.parent', $this->profile());
+        config()->set('workdays.definitions.profiles.warehouse', ['extends' => 'parent']);
         $snapshot = $this->makeSnapshot($this->workPlan(120), '2026-11-02T11:00:00Z');
-        config()->set('workdays.profiles.parent.special_working_hours', ['2026-11-02' => [['09:00', '12:00']]]);
+        config()->set('workdays.definitions.profiles.parent.special_working_hours', ['2026-11-02' => [['09:00', '12:00']]]);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -279,16 +305,17 @@ final class CalendarVersioningTest extends TestCase
         $this->assertSame('2026-11-02 13:00:00', $snapshot->originalResult->estimatedCompletionAt->toDateTimeString());
     }
 
-    public function test_inherited_database_rows_remain_keyed_only_to_the_selected_child(): void
+    public function test_inherited_logical_holidays_are_frozen_under_the_selected_child_identity(): void
     {
-        $this->databaseStorage();
-        config()->set('workdays.profiles.parent', $this->profile());
-        config()->set('workdays.profiles.warehouse', ['extends' => 'parent']);
-        WorkdaySpecialDate::create(['profile' => 'parent', 'date' => '2026-11-02', 'type' => 'holiday', 'title' => 'Parent database only', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.parent', $this->profile());
+        config()->set('workdays.definitions.profiles.warehouse', ['extends' => 'parent']);
+        config()->set('workdays.definitions.profiles.parent.custom_holidays', ['2026-11-02' => 'Parent logical holiday']);
         $snapshot = $this->makeSnapshot($this->workPlan(120), '2026-11-02T10:00:00Z');
 
-        $this->assertSame('2026-11-02 12:00:00', $snapshot->originalResult->estimatedCompletionAt->toDateTimeString());
-        $this->assertTrue($this->evidenceDay($snapshot, 'warehouse', '2026-11-02')['is_business_day']);
+        $this->assertSame('2026-11-03 11:00:00', $snapshot->originalResult->estimatedCompletionAt->toDateTimeString());
+        $this->assertFalse($this->evidenceDay($snapshot, 'warehouse', '2026-11-02')['is_business_day']);
+        $this->assertArrayNotHasKey('parent', $snapshot->calendarEvidence['profiles']);
+        $this->assertSame('Parent logical holiday', $this->evidenceDay($snapshot, 'warehouse', '2026-11-02')['holiday_reasons'][0]['title']);
     }
 
     public function test_i_cutoff_change_recalculates_current_plan_and_preserves_original_cutoff_result(): void
@@ -296,7 +323,7 @@ final class CalendarVersioningTest extends TestCase
         $plan = $this->workPlan(120);
         $plan['cutoff_profile'] = 'warehouse';
         $snapshot = $this->makeSnapshot($plan, '2026-11-02T13:00:00Z');
-        config()->set('workdays.profiles.warehouse.cutoff.time', '12:00');
+        config()->set('workdays.definitions.profiles.warehouse.cutoff.time', '12:00');
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -310,7 +337,7 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_non_utc_cutoff_with_disabled_weekday_survives_frozen_json_round_trip(): void
     {
-        config()->set('workdays.profiles.warehouse.cutoff', ['timezone' => 'Asia/Tehran', 'time' => '14:00', 'weekdays' => ['Monday' => null]]);
+        config()->set('workdays.definitions.profiles.warehouse.cutoff', ['timezone' => 'Asia/Tehran', 'time' => '14:00', 'weekdays' => ['Monday' => null]]);
         $plan = $this->workPlan(60);
         $plan['timezone'] = 'Asia/Tehran';
         $plan['profile_timezones']['warehouse'] = 'Asia/Tehran';
@@ -329,7 +356,7 @@ final class CalendarVersioningTest extends TestCase
     #[DataProvider('timezoneDatabaseDriftModes')]
     public function test_restored_cutoff_business_midnight_uses_the_destination_date_dst_offset(bool $timezoneDatabaseChanged): void
     {
-        config()->set('workdays.profiles.warehouse.cutoff', ['timezone' => 'America/New_York', 'time' => '14:00']);
+        config()->set('workdays.definitions.profiles.warehouse.cutoff', ['timezone' => 'America/New_York', 'time' => '14:00']);
         $plan = $this->workPlan(0);
         $plan['timezone'] = 'America/New_York';
         $plan['profile_timezones']['warehouse'] = 'America/New_York';
@@ -359,13 +386,13 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_j_overnight_owner_change_affects_receiving_day_without_double_counting(): void
     {
-        config()->set('workdays.profiles.warehouse', array_replace($this->profile(), ['allow_overnight_working_hours' => true, 'working_hours' => ['Friday' => [['22:00', '06:00']]], 'custom_holidays' => ['2026-11-07' => 'Receiving holiday']]));
+        config()->set('workdays.definitions.profiles.warehouse', array_replace($this->profile(), ['allow_overnight_working_hours' => true, 'working_hours' => ['Friday' => [['22:00', '06:00']]], 'custom_holidays' => ['2026-11-07' => 'Receiving holiday']]));
         $snapshot = $this->makeSnapshot($this->workPlan(180), '2026-11-06T23:00:00Z', 10);
         $day = $this->evidenceDay($snapshot, 'warehouse', '2026-11-07');
         $this->assertFalse($day['is_business_day']);
         $this->assertNotEmpty($day['effective_working_windows']);
         $this->assertSame('2026-11-07 02:00:00', $snapshot->originalResult->estimatedCompletionAt->toDateTimeString());
-        config()->set('workdays.profiles.warehouse.special_working_hours', ['2026-11-06' => []]);
+        config()->set('workdays.definitions.profiles.warehouse.special_working_hours', ['2026-11-06' => []]);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -392,14 +419,25 @@ final class CalendarVersioningTest extends TestCase
     {
         $snapshot = $this->makeSnapshot();
         $payload = $snapshot->toArray();
-        config()->set('workdays.profiles', []);
-        config()->set('workdays.hijri', ['method' => 'invalid', 'adjustment' => 'bad']);
+        config()->set('workdays.definitions.profiles', []);
+        config()->set('workdays.definitions.hijri', ['method' => 'invalid', 'adjustment' => 'bad']);
         config()->set('workdays.max_scan_days', 1);
 
         $restored = DeliveryPromiseSnapshot::fromArray($payload);
-        $comparison = Workday::compareDeliveryPromise($restored);
 
         $this->assertSame($payload, $restored->toArray());
+        $this->assertSame('2026-11-03 16:00:00', $restored->originalResult->estimatedCompletionAt->toDateTimeString());
+        $this->expectException(DefinitionSourceException::class);
+        $this->expectExceptionMessage('Invalid Config source operational settings');
+        Workday::compareDeliveryPromise($restored);
+    }
+
+    public function test_missing_current_selected_profiles_are_unresolvable_after_successful_source_open(): void
+    {
+        $snapshot = $this->makeSnapshot();
+        config()->set('workdays.definitions.profiles', []);
+        $comparison = Workday::compareDeliveryPromise($snapshot);
+
         $this->assertSame('unresolvable', $comparison->status);
         $this->assertSame('unresolvable', $comparison->direction);
         $this->assertNull($comparison->currentEstimatedCompletionAt);
@@ -408,15 +446,15 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_unused_profile_timezone_mappings_do_not_capture_or_require_that_profiles_calendar(): void
     {
-        config()->set('workdays.profiles.unused', $this->profile());
+        config()->set('workdays.definitions.profiles.unused', $this->profile());
         $plan = $this->workPlan(60);
         $plan['profile_timezones']['unused'] = 'Asia/Tehran';
         $snapshot = $this->makeSnapshot($plan, '2026-11-02T10:00:00Z');
         $payload = $snapshot->toArray();
         $this->assertArrayNotHasKey('unused', $payload['calendar_evidence']['profiles']);
-        $profiles = config('workdays.profiles');
+        $profiles = config('workdays.definitions.profiles');
         unset($profiles['unused']);
-        config()->set('workdays.profiles', $profiles);
+        config()->set('workdays.definitions.profiles', $profiles);
 
         $restored = DeliveryPromiseSnapshot::fromArray($payload);
 
@@ -483,10 +521,10 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_m_reordered_associative_maps_and_weekday_aliases_do_not_change_calendar_version(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-06' => 'Friday', '2026-11-05' => 'Thursday']);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-06' => 'Friday', '2026-11-05' => 'Thursday']);
         $snapshot = $this->makeSnapshot($this->workPlan(60), '2026-11-02T10:00:00Z');
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-05' => 'Thursday', '2026-11-06' => 'Friday']);
-        config()->set('workdays.profiles.warehouse.working_hours', [5 => [['09:00', '17:00']], 4 => [['09:00', '17:00']], 3 => [['09:00', '17:00']], 2 => [['09:00', '17:00']], 1 => [['09:00', '17:00']]]);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-05' => 'Thursday', '2026-11-06' => 'Friday']);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', [5 => [['09:00', '17:00']], 4 => [['09:00', '17:00']], 3 => [['09:00', '17:00']], 2 => [['09:00', '17:00']], 1 => [['09:00', '17:00']]]);
 
         $this->assertFalse(Workday::compareDeliveryPromise($snapshot)->versionChanged);
         $this->assertSame(CalendarFingerprint::hash(['b' => ['y' => 2, 'x' => 1], 'a' => 0]), CalendarFingerprint::hash(['a' => 0, 'b' => ['x' => 1, 'y' => 2]]));
@@ -498,7 +536,7 @@ final class CalendarVersioningTest extends TestCase
     public function test_n_unresolvable_current_calendar_returns_null_current_estimate_and_useful_error(): void
     {
         $snapshot = $this->makeSnapshot($this->workPlan(120), '2026-11-02T10:00:00Z', 1);
-        config()->set('workdays.profiles.warehouse.working_hours', []);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', []);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -553,7 +591,7 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_o_thirty_one_future_dates_are_supported_without_requiring_working_hours(): void
     {
-        config()->set('workdays.profiles.carrier', ['weekends' => [], 'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []], 'custom_holidays' => [], 'extra_working_days' => []]);
+        config()->set('workdays.definitions.profiles.carrier', ['weekends' => [], 'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []], 'custom_holidays' => [], 'extra_working_days' => []]);
         $snapshot = $this->makeSnapshot($this->dayPlan(31), '2026-11-02T10:00:00Z', 31);
 
         $this->assertSame('2026-12-03 10:00:00', $snapshot->originalResult->estimatedCompletionAt->toDateTimeString());
@@ -574,7 +612,7 @@ final class CalendarVersioningTest extends TestCase
             $timezones[$name] = 'UTC';
             $stages[] = ['id' => 'stage_'.$number, 'type' => 'work', 'profile' => $name, 'minutes' => 0];
         }
-        config()->set('workdays.profiles', $profiles);
+        config()->set('workdays.definitions.profiles', $profiles);
         $plan = ['timezone' => 'UTC', 'profile_timezones' => $timezones, 'stages' => array_slice($stages, 0, 8)];
         $snapshot = $this->makeSnapshot($plan, '2026-11-02T09:00:00Z', 1);
         $this->assertCount(8, $snapshot->toArray()['calendar_evidence']['profiles']);
@@ -587,7 +625,7 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_skipped_apia_civil_date_does_not_extend_the_global_horizon(): void
     {
-        config()->set('workdays.profiles.carrier', array_replace($this->profile(), ['weekends' => []]));
+        config()->set('workdays.definitions.profiles.carrier', array_replace($this->profile(), ['weekends' => []]));
         $plan = $this->dayPlan(1);
         $plan['timezone'] = 'Pacific/Apia';
         $plan['profile_timezones']['carrier'] = 'Pacific/Apia';
@@ -602,7 +640,7 @@ final class CalendarVersioningTest extends TestCase
     #[DataProvider('dstOvernightPlans')]
     public function test_dst_overnight_snapshot_reuses_actual_elapsed_working_minutes(string $received, int $minutes, string $expected): void
     {
-        config()->set('workdays.profiles.warehouse', array_replace($this->profile(), ['weekends' => [], 'allow_overnight_working_hours' => true, 'working_hours' => ['Saturday' => [['22:00', '06:00']]]]));
+        config()->set('workdays.definitions.profiles.warehouse', array_replace($this->profile(), ['weekends' => [], 'allow_overnight_working_hours' => true, 'working_hours' => ['Saturday' => [['22:00', '06:00']]]]));
         $plan = $this->workPlan($minutes);
         $plan['timezone'] = 'America/New_York';
         $plan['profile_timezones']['warehouse'] = 'America/New_York';
@@ -623,7 +661,7 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_profile_timezone_coverage_contains_neighboring_dates_for_overnight_ownership(): void
     {
-        config()->set('workdays.profiles.warehouse', array_replace($this->profile(), ['weekends' => [], 'allow_overnight_working_hours' => true, 'working_hours' => array_fill_keys(range(1, 7), [['22:00', '06:00']])]));
+        config()->set('workdays.definitions.profiles.warehouse', array_replace($this->profile(), ['weekends' => [], 'allow_overnight_working_hours' => true, 'working_hours' => array_fill_keys(range(1, 7), [['22:00', '06:00']])]));
         $plan = $this->workPlan(60);
         $plan['profile_timezones']['warehouse'] = 'Pacific/Kiritimati';
         $snapshot = $this->makeSnapshot($plan, '2026-11-02T11:00:00Z', 1);
@@ -637,25 +675,16 @@ final class CalendarVersioningTest extends TestCase
     }
 
     #[DataProvider('batchHorizons')]
-    public function test_database_inputs_are_batched_per_profile_and_capture_and_compare_only_select(int $horizon): void
+    public function test_config_capture_and_compare_issue_no_database_queries_at_either_horizon(int $horizon): void
     {
-        $this->databaseStorage();
         $connection = $this->app['db']->connection();
         $connection->enableQueryLog();
         $snapshot = $this->makeSnapshot(null, '2026-11-02T13:00:00Z', $horizon);
-        $queries = $connection->getQueryLog();
-        $this->assertCount(4, $queries);
-        foreach ($queries as $query) {
-            $this->assertStringStartsWith('select', strtolower(ltrim($query['query'])));
-            $this->assertStringNotContainsString('for update', strtolower($query['query']));
-        }
+        $this->assertSame([], $connection->getQueryLog());
         $connection->flushQueryLog();
         $comparison = Workday::compareDeliveryPromise($snapshot);
         $this->assertFalse($comparison->estimateChanged);
-        $this->assertCount(4, $connection->getQueryLog());
-        foreach ($connection->getQueryLog() as $query) {
-            $this->assertStringStartsWith('select', strtolower(ltrim($query['query'])));
-        }
+        $this->assertSame([], $connection->getQueryLog());
         $connection->disableQueryLog();
     }
 
@@ -664,34 +693,48 @@ final class CalendarVersioningTest extends TestCase
         return [[1], [31]];
     }
 
-    public function test_database_row_ids_and_inactive_or_outside_range_rows_do_not_change_version(): void
+    public function test_conflicting_database_publications_and_their_ids_do_not_affect_the_config_source(): void
     {
-        $this->databaseStorage();
-        $row = WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-06', 'type' => 'holiday', 'title' => 'Same effective closure', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
         $snapshot = $this->makeSnapshot();
-        $row->delete();
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-06', 'type' => 'holiday', 'title' => 'Same effective closure', 'is_active' => true]);
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-03', 'type' => 'holiday', 'title' => 'Inactive', 'is_active' => false]);
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2035-11-03', 'type' => 'holiday', 'title' => 'Outside range', 'is_active' => true]);
+        $repository = $this->app->make(DatabaseDefinitionRepository::class);
+        $current = $repository->current();
+        $definitions = $current->definitions;
+        $definitions['profiles']['warehouse']['custom_holidays'] = ['2026-11-06' => 'Database-only closure', '2035-11-03' => 'Outside range'];
+        $published = $repository->publish($definitions, $current->revisionId);
 
+        $this->assertNotSame($current->revisionId, $published->revisionId);
         $this->assertFalse(Workday::compareDeliveryPromise($snapshot)->versionChanged);
     }
 
-    public function test_database_materialization_and_original_result_use_the_same_frozen_view(): void
+    public function test_config_materialization_and_original_result_use_one_view_despite_concurrent_config_edit(): void
     {
-        $this->databaseStorage();
-        $injected = false;
-        $this->app['db']->listen(static function (QueryExecuted $query) use (&$injected): void {
-            if (! $injected && str_starts_with(strtolower(ltrim($query->sql)), 'select') && str_contains($query->sql, 'workday_special_dates')) {
-                $injected = true;
-                // Simulate an external update immediately after the old exception rows were fetched.
-                WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-02', 'type' => 'holiday', 'title' => 'Concurrent fixture update', 'is_active' => true]);
+        $source = new class(new ConfigDefinitionSource($this->app['config'])) implements DefinitionSource
+        {
+            public bool $injected = false;
+
+            public function __construct(private ConfigDefinitionSource $source) {}
+
+            public function open(): WorkdayDefinitions
+            {
+                $view = $this->source->open();
+
+                if (! $this->injected) {
+                    $this->injected = true;
+                    config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-02' => 'Concurrent fixture update']);
+                }
+
+                return $view;
             }
-        });
+        };
+        $this->app->instance(DefinitionSource::class, $source);
+        $this->app->forgetInstance(CalculationContextFactory::class);
+        $this->app->forgetInstance(WorkdayManager::class);
+        Workday::clearResolvedInstance('workdays');
 
         $snapshot = $this->makeSnapshot($this->workPlan(120), '2026-11-02T10:00:00Z', 1);
 
-        $this->assertTrue($injected);
+        $this->assertTrue($source->injected);
         $this->assertTrue($this->evidenceDay($snapshot, 'warehouse', '2026-11-02')['is_business_day']);
         $this->assertSame('2026-11-02 12:00:00', $snapshot->originalResult->estimatedCompletionAt->toDateTimeString());
         $comparison = Workday::compareDeliveryPromise($snapshot);
@@ -699,22 +742,22 @@ final class CalendarVersioningTest extends TestCase
         $this->assertSame('2026-11-03 11:00:00', $comparison->currentEstimatedCompletionAt->toDateTimeString());
     }
 
-    public function test_missing_database_tables_keep_the_meaningful_storage_error(): void
+    public function test_missing_database_schema_fails_capture_with_setup_guidance(): void
     {
-        config()->set('workdays.storage.driver', 'database');
-        $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('migrations');
+        config()->set('workdays.driver', 'database');
+        $this->expectException(DefinitionSourceException::class);
+        $this->expectExceptionMessage('definitions migration');
 
         $this->makeSnapshot();
     }
 
     public function test_routing_changes_do_not_select_a_different_profile_during_comparison(): void
     {
-        config()->set('workdays.profile_routing', ['fallback_profile' => 'warehouse', 'rules' => []]);
+        config()->set('workdays.definitions.profile_routing', ['fallback_profile' => 'warehouse', 'rules' => []]);
         $selected = Workday::resolveProfile([]);
         $snapshot = $this->makeSnapshot($this->workPlan(60, $selected->profile), '2026-11-02T10:00:00Z');
-        config()->set('workdays.profile_routing', ['fallback_profile' => 'carrier', 'rules' => []]);
-        config()->set('workdays.profiles.carrier.custom_holidays', ['2026-11-02' => 'Would delay rerouting']);
+        config()->set('workdays.definitions.profile_routing', ['fallback_profile' => 'carrier', 'rules' => []]);
+        config()->set('workdays.definitions.profiles.carrier.custom_holidays', ['2026-11-02' => 'Would delay rerouting']);
 
         $comparison = Workday::compareDeliveryPromise($snapshot);
 
@@ -996,7 +1039,7 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_oversized_materialized_calendar_evidence_is_rejected_during_capture(): void
     {
-        config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-03' => str_repeat('x', 1100000)]);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-03' => str_repeat('x', 1100000)]);
         $this->expectException(InvalidArgumentException::class);
         $this->expectExceptionMessage('size limit');
 
@@ -1013,9 +1056,9 @@ final class CalendarVersioningTest extends TestCase
 
     public function test_capture_rejects_historical_cutoff_offsets_with_non_minute_seconds(): void
     {
-        config()->set('workdays.profiles.warehouse.weekends', []);
-        config()->set('workdays.profiles.warehouse.working_hours', array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], [['09:00', '17:00']]));
-        config()->set('workdays.profiles.warehouse.cutoff', ['timezone' => 'Asia/Tehran', 'time' => '14:00']);
+        config()->set('workdays.definitions.profiles.warehouse.weekends', []);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'], [['09:00', '17:00']]));
+        config()->set('workdays.definitions.profiles.warehouse.cutoff', ['timezone' => 'Asia/Tehran', 'time' => '14:00']);
         $plan = $this->workPlan(0);
         $plan['timezone'] = 'Asia/Tehran';
         $plan['profile_timezones']['warehouse'] = 'Asia/Tehran';
@@ -1036,14 +1079,14 @@ final class CalendarVersioningTest extends TestCase
             $originalWindows[] = [$clock($minute), $clock($minute + 1)];
             $currentWindows[] = [$clock($minute + 1), $clock($minute + 2)];
         }
-        config()->set('workdays.profiles.warehouse.working_hours', array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], $originalWindows));
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], $originalWindows));
         $snapshot = $this->makeSnapshot($this->workPlan(0), '2026-11-02T00:00:00Z', 31);
         $payload = $snapshot->toArray();
         $this->assertLessThanOrEqual(CalendarFingerprint::MAX_BYTES, strlen(json_encode($payload, JSON_THROW_ON_ERROR)));
         $restored = DeliveryPromiseSnapshot::fromArray($payload);
         $this->assertSame($payload, $restored->toArray());
         $this->assertFalse(Workday::compareDeliveryPromise($restored)->estimateChanged);
-        config()->set('workdays.profiles.warehouse.working_hours', array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], $currentWindows));
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', array_fill_keys(['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday'], $currentWindows));
 
         $comparison = Workday::compareDeliveryPromise($restored);
 
@@ -1096,12 +1139,6 @@ final class CalendarVersioningTest extends TestCase
     private function makeSnapshot(?array $plan = null, string $received = '2026-11-02T13:00:00Z', int $horizon = 7): DeliveryPromiseSnapshot
     {
         return Workday::captureDeliveryPromise($received, $plan ?? $this->referencePlan(), ['horizon_days' => $horizon]);
-    }
-
-    private function databaseStorage(string $driver = 'database'): void
-    {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', $driver);
     }
 
     private function changedDay(DeliveryPromiseComparison $comparison, string $profile, string $date): array

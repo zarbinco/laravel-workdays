@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 
 use InvalidArgumentException;
+use PHPUnit\Framework\Attributes\DataProvider;
 use Zarbinco\LaravelWorkdays\Calendars\IranOfficialCalendar;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
@@ -106,6 +107,57 @@ final class IranOfficialCalendarTest extends TestCase
         $this->expectExceptionMessage('requires a non-empty title');
 
         (new IranOfficialCalendar)->validateDataset($dataset);
+    }
+
+    #[DataProvider('invalidDateCases')]
+    public function test_dataset_rejects_invalid_dates_and_correspondence(string $jalali, string $gregorian): void
+    {
+        $dataset = $this->validDataset();
+        $dataset['holidays'][0]['date'] = $jalali;
+        $dataset['holidays'][0]['gregorian_date'] = $gregorian;
+        $this->expectException(InvalidArgumentException::class);
+        (new IranOfficialCalendar)->validateDataset($dataset);
+    }
+
+    public static function invalidDateCases(): array
+    {
+        return [['1405-01-01', '2026-02-30'], ['1405-01-01', '2026-03-22'], ['1405-12-30', '2027-03-21'], ['1405-07-31', '2026-10-23'], ['1404-01-01', '2025-03-21']];
+    }
+
+    public function test_dataset_rejects_duplicate_dates_even_when_titles_differ(): void
+    {
+        $dataset = $this->validDataset();
+        $dataset['holidays'][] = [...$dataset['holidays'][0], 'title' => 'Different duplicate'];
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('duplicate holiday date');
+        (new IranOfficialCalendar)->validateDataset($dataset);
+    }
+
+    public function test_dataset_metadata_is_bounded_data_with_an_actual_http_source(): void
+    {
+        $dataset = $this->validDataset();
+        $dataset['source']['url'] = 'javascript:alert(1)';
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage('absolute HTTP or HTTPS URL');
+        (new IranOfficialCalendar)->validateDataset($dataset);
+    }
+
+    #[DataProvider('invalidDatasetFields')]
+    public function test_dataset_rejects_malformed_metadata_and_holiday_flags(string $path, mixed $value, string $message): void
+    {
+        $dataset = $this->validDataset();
+        data_set($dataset, $path, $value);
+        $this->expectException(InvalidArgumentException::class);
+        $this->expectExceptionMessage($message);
+        (new IranOfficialCalendar)->validateDataset($dataset);
+    }
+
+    public static function invalidDatasetFields(): array
+    {
+        return [['source', null, 'must include source metadata'], ['country', 'US', 'country must be [IR]'],
+            ['calendar', 'gregorian', 'calendar must be [jalali]'], ['source.name', '', 'non-empty [name]'],
+            ['source.retrieved_at', '2026-02-30', 'Invalid date'], ['holidays.0.type', 'unofficial', 'type must be [official_holiday]'],
+            ['holidays.0.is_official_holiday', false, 'must be marked as an official holiday']];
     }
 
     /**

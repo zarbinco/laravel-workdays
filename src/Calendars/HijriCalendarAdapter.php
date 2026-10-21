@@ -35,26 +35,10 @@ final readonly class HijriCalendarAdapter
     ];
 
     public function __construct(
-        private string $method = self::METHOD_UMM_AL_QURA,
-        private int $adjustment = 0,
+        private string $method,
+        private int $adjustment,
     ) {
         $this->validateConfig($method, $adjustment);
-    }
-
-    public static function fromConfig(): self
-    {
-        $method = config('workdays.hijri.method', self::METHOD_UMM_AL_QURA);
-        $adjustment = config('workdays.hijri.adjustment', 0);
-
-        if (! is_string($method)) {
-            throw new InvalidArgumentException('The workdays hijri.method config value must be a string.');
-        }
-
-        if (! is_int($adjustment)) {
-            throw new InvalidArgumentException('The workdays hijri.adjustment config value must be an integer.');
-        }
-
-        return new self($method, $adjustment);
     }
 
     public function monthDayFromGregorian(CarbonImmutable $date): string

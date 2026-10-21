@@ -17,12 +17,16 @@ use PDOException;
 use ReflectionClass;
 use RuntimeException;
 use Throwable;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContext;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory;
 use Zarbinco\LaravelWorkdays\Data\BulkCalculationItemResult;
 use Zarbinco\LaravelWorkdays\Data\BulkCalculationResult;
 use Zarbinco\LaravelWorkdays\Delivery\DeliveryPlanner;
 use Zarbinco\LaravelWorkdays\Delivery\DeliverySlotGenerator;
 use Zarbinco\LaravelWorkdays\Delivery\ReverseDeliveryPlanner;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
+use Zarbinco\LaravelWorkdays\Exceptions\WorkingTimeSearchException;
 use Zarbinco\LaravelWorkdays\Recurring\RecurringScheduleGenerator;
 use Zarbinco\LaravelWorkdays\Sla\SlaEvaluator;
 
@@ -45,7 +49,7 @@ final readonly class BulkCalculator
     private ?Closure $observer;
 
     /** @internal Optional allocation observer for isolated tests/benchmarks, never a payload option. */
-    public function __construct(?callable $onConstruction = null)
+    public function __construct(private CalculationContextFactory $contexts, ?callable $onConstruction = null)
     {
         $this->observer = $onConstruction === null ? null : Closure::fromCallable($onConstruction);
     }
@@ -72,13 +76,7 @@ final readonly class BulkCalculator
             }
         }
 
-        $configuration = config('workdays', []);
-
-        if (! is_array($configuration)) {
-            throw new WorkdayConfigurationException('The workdays configuration must be an array.');
-        }
-
-        $context = new BulkContext($configuration, $references, $options['prefetch'] ?? null, $this->observer);
+        $context = $this->contexts->open($this->observer);
         $results = [];
 
         foreach ($inputs as $input) {
@@ -216,7 +214,7 @@ final readonly class BulkCalculator
         return array_map('strval', array_keys($names));
     }
 
-    private function dispatch(array $item, BulkContext $context): mixed
+    private function dispatch(array $item, CalculationContext $context): mixed
     {
         foreach (self::FIELDS[$item['operation']] as $field) {
             if (! array_key_exists($field, $item)) {
@@ -238,11 +236,6 @@ final readonly class BulkCalculator
 
         $operation = $item['operation'];
 
-        if ($operation === 'reverse_plan_delivery') {
-            // The individual manager validates the registry before entering the reverse engine.
-            $context->validateProfileRegistry();
-        }
-
         if (in_array($operation, ['is_business_day', 'working_windows', 'add_business_days', 'add_business_minutes', 'resolve_cutoff'], true)) {
             $calculator = $context->calculator($item['profile']);
 
@@ -255,17 +248,17 @@ final readonly class BulkCalculator
             };
         }
 
-        $scanSettings = $context->scanSettings();
+        $limit = $context->maxScanDays;
         $resolve = $context->calculator(...);
         $config = $context->configuration(...);
-        $forward = new DeliveryPlanner($resolve, $config, knownProfiles: $context->knownProfiles, scanSettings: $scanSettings);
+        $forward = new DeliveryPlanner($resolve, $config, $limit, $context->hasProfile(...));
 
         return match ($operation) {
             'plan_delivery' => $forward->plan($item['received_at'], $item['plan']),
-            'delivery_slots' => (new DeliverySlotGenerator($resolve, $scanSettings))->generate($item['ready_at'], $item['options']),
-            'recurring_schedule' => (new RecurringScheduleGenerator($resolve, $scanSettings))->generate($item['anchor_date'], $item['options']),
-            'evaluate_sla' => (new SlaEvaluator($resolve, $config, $scanSettings))->evaluate($item['started_at'], $item['evaluated_at'], $item['options']),
-            'reverse_plan_delivery' => (new ReverseDeliveryPlanner($forward, $resolve, $config, $scanSettings))->plan($item['desired_completion_at'], $item['plan'], $item['options']),
+            'delivery_slots' => (new DeliverySlotGenerator($resolve, $limit))->generate($item['ready_at'], $item['options']),
+            'recurring_schedule' => (new RecurringScheduleGenerator($resolve, $limit))->generate($item['anchor_date'], $item['options']),
+            'evaluate_sla' => (new SlaEvaluator($resolve, $config, $limit))->evaluate($item['started_at'], $item['evaluated_at'], $item['options']),
+            'reverse_plan_delivery' => (new ReverseDeliveryPlanner($forward, $resolve, $config, $limit))->plan($item['desired_completion_at'], $item['plan'], $item['options']),
         };
     }
 
@@ -276,7 +269,7 @@ final readonly class BulkCalculator
         $causes = [];
 
         for ($cause = $exception; $cause !== null; $cause = $cause->getPrevious()) {
-            if ($cause instanceof PDOException || $cause instanceof \Error) {
+            if ($cause instanceof DefinitionSourceException || $cause instanceof PDOException || $cause instanceof \Error) {
                 return false;
             }
 
@@ -319,6 +312,10 @@ final readonly class BulkCalculator
         $message = $leaf->getMessage();
 
         if ($exception instanceof InvalidArgumentException) {
+            return true;
+        }
+
+        if ($leaf instanceof WorkingTimeSearchException && $file === $root.'/Support/WorkingTime.php') {
             return true;
         }
 

@@ -26,7 +26,7 @@ final readonly class RecurringScheduleGenerator
     private Closure $resolveCalculator;
 
     /** @param callable(string): BusinessDayCalculator $resolveCalculator */
-    public function __construct(callable $resolveCalculator, private ?array $scanSettings = null)
+    public function __construct(callable $resolveCalculator, private int $maxScanDays)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
     }
@@ -39,7 +39,7 @@ final readonly class RecurringScheduleGenerator
         $anchor = $this->anchor($anchorDate, $zone);
 
         try {
-            $limit = ProfileConfigValidator::validateMaxScanDays($this->scanSettings === null ? config('workdays.max_scan_days', 3660) : $this->scanSettings['max_scan_days']);
+            $limit = ProfileConfigValidator::validateMaxScanDays($this->maxScanDays);
         } catch (InvalidArgumentException $exception) {
             throw new WorkdayConfigurationException('Invalid recurring schedule horizon: '.$exception->getMessage(), previous: $exception);
         }

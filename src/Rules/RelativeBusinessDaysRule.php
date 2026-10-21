@@ -10,6 +10,7 @@ use DateTimeInterface;
 use Illuminate\Contracts\Validation\ValidationRule;
 use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Rules\Concerns\ParsesRuleDates;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
 
@@ -61,6 +62,8 @@ final class RelativeBusinessDaysRule implements ValidationRule
 
         try {
             $target = $this->targetDate($from);
+        } catch (DefinitionSourceException $exception) {
+            throw $exception;
         } catch (\Throwable) {
             $fail($this->messageText('The :attribute could not be validated against business days.', $attribute));
 

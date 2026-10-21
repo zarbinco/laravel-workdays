@@ -46,15 +46,6 @@ final class ProfileConfigValidator
         return $maxScanDays;
     }
 
-    public static function validateIncludeStartDate(mixed $includeStartDate): bool
-    {
-        if (is_array($includeStartDate) || is_object($includeStartDate)) {
-            throw new InvalidArgumentException('The workdays include_start_date config value must be boolean-compatible.');
-        }
-
-        return (bool) $includeStartDate;
-    }
-
     private static function validateHolidays(string $profile, mixed $holidays): void
     {
         if (! is_array($holidays)) {
@@ -85,6 +76,9 @@ final class ProfileConfigValidator
                 }
 
                 HolidayKeyValidator::validate($calendar, $key, $profile);
+                if ($recurringHolidays[$key] !== null && ! is_string($recurringHolidays[$key])) {
+                    throw new InvalidArgumentException(sprintf('The holidays.%s title for profile [%s] and key [%s] must be a string or null.', $calendar, $profile, $key));
+                }
             }
         }
     }
@@ -95,6 +89,7 @@ final class ProfileConfigValidator
             throw new InvalidArgumentException(sprintf('The weekends config for profile [%s] must be an array.', $profile));
         }
 
+        $seen = [];
         foreach ($weekends as $weekday) {
             if (! is_int($weekday) && ! is_string($weekday)) {
                 throw new InvalidArgumentException(sprintf(
@@ -104,7 +99,7 @@ final class ProfileConfigValidator
             }
 
             try {
-                WeekdayNormalizer::toIso($weekday);
+                $iso = WeekdayNormalizer::toIso($weekday);
             } catch (InvalidArgumentException $exception) {
                 throw new InvalidArgumentException(sprintf(
                     'Invalid weekend value [%s] for profile [%s]. Expected an ISO weekday integer from 1 to 7 or a supported weekday name.',
@@ -112,6 +107,10 @@ final class ProfileConfigValidator
                     $profile,
                 ), previous: $exception);
             }
+            if (isset($seen[$iso])) {
+                throw new InvalidArgumentException(sprintf('Duplicate normalized weekend weekday [%d] for profile [%s].', $iso, $profile));
+            }
+            $seen[$iso] = true;
         }
     }
 

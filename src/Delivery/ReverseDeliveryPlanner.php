@@ -14,9 +14,10 @@ use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Data\ReverseDeliveryPlanResult;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
+use Zarbinco\LaravelWorkdays\Exceptions\WorkingTimeSearchException;
 use Zarbinco\LaravelWorkdays\Support\CutoffPolicy;
 use Zarbinco\LaravelWorkdays\Support\ProfileConfigValidator;
-use Zarbinco\LaravelWorkdays\Support\WorkingHours;
+use Zarbinco\LaravelWorkdays\Support\WorkingTime;
 use Zarbinco\LaravelWorkdays\Support\WorkingTimeBoundary;
 
 /**
@@ -53,9 +54,6 @@ final class ReverseDeliveryPlanner
     /** @var array<string, list<array{int, int}>> */
     private array $workingIntervals = [];
 
-    /** @var array<string, bool> */
-    private array $enhancedProfiles = [];
-
     private int $target;
 
     private int $start;
@@ -68,7 +66,7 @@ final class ReverseDeliveryPlanner
      * @param  callable(string, int): BusinessDayCalculator  $resolveCalculator
      * @param  callable(string): array<string, mixed>  $resolveProfileConfig
      */
-    public function __construct(private readonly DeliveryPlanner $forward, callable $resolveCalculator, callable $resolveProfileConfig, private readonly ?array $scanSettings = null)
+    public function __construct(private readonly DeliveryPlanner $forward, callable $resolveCalculator, callable $resolveProfileConfig, private readonly int $maxScanDays)
     {
         $this->resolveCalculator = Closure::fromCallable($resolveCalculator);
         $this->resolveProfileConfig = Closure::fromCallable($resolveProfileConfig);
@@ -80,7 +78,7 @@ final class ReverseDeliveryPlanner
         $this->forward->validatePlan($plan);
 
         try {
-            $limit = ProfileConfigValidator::validateMaxScanDays($this->scanSettings === null ? config('workdays.max_scan_days', 3660) : $this->scanSettings['max_scan_days']);
+            $limit = ProfileConfigValidator::validateMaxScanDays($this->maxScanDays);
         } catch (InvalidArgumentException $exception) {
             throw new WorkdayConfigurationException('Invalid reverse delivery horizon: '.$exception->getMessage(), previous: $exception);
         }
@@ -102,9 +100,8 @@ final class ReverseDeliveryPlanner
         $this->plan = $plan;
         $this->prefixes = $this->values = $this->calculators = $this->zoneEvents = $this->destinationDates = [];
         $this->workingIntervals = [];
-        $this->enhancedProfiles = [];
         $this->evaluations = $this->cells = 0;
-        $this->target = self::micros($target);
+        $this->target = WorkingTime::micros($target);
         $targetLabel = $target->setTimezone($plan['timezone'])->toDateString();
         $firstLabel = WorkingTimeBoundary::labelAfter($targetLabel, -$options['lookback_days']);
 
@@ -120,7 +117,7 @@ final class ReverseDeliveryPlanner
             throw $this->unprovable('The backward date window cannot be represented.');
         }
 
-        $this->start = self::micros($first);
+        $this->start = WorkingTime::micros($first);
         $this->prepare($limit);
         $events = $this->events($plan['timezone']);
 
@@ -145,7 +142,7 @@ final class ReverseDeliveryPlanner
                 $cutoff = $date === null ? null : $policy->cutoffAt($date->setTimezone($zone));
 
                 if ($cutoff !== null) {
-                    $events[] = self::micros($cutoff);
+                    $events[] = WorkingTime::micros($cutoff);
                 }
             }
         }
@@ -175,10 +172,10 @@ final class ReverseDeliveryPlanner
         }
 
         // A fresh full evaluation, with the exact original plan and unchanged forward horizon.
-        $verified = $this->forward->plan(self::instant($latest), $plan);
-        $completion = self::micros($verified->estimatedCompletionAt);
+        $verified = $this->forward->plan(WorkingTime::fromMicros($latest), $plan);
+        $completion = WorkingTime::micros($verified->estimatedCompletionAt);
 
-        if ($completion > $this->target || self::micros($verified->receivedAt) !== $latest) {
+        if ($completion > $this->target || WorkingTime::micros($verified->receivedAt) !== $latest) {
             throw $this->unprovable('Final forward verification disagrees with the search.');
         }
 
@@ -397,16 +394,16 @@ final class ReverseDeliveryPlanner
         }
 
         try {
-            $result = $this->forward->plan(self::instant($receipt), $this->prefixes[$prefix]);
-            $value = self::micros($prefix === 0 ? $result->planningStartAt : $result->estimatedCompletionAt);
+            $result = $this->forward->plan(WorkingTime::fromMicros($receipt), $this->prefixes[$prefix]);
+            $value = WorkingTime::micros($prefix === 0 ? $result->planningStartAt : $result->estimatedCompletionAt);
 
             foreach ($result->stages as $index => $stageResult) {
                 if ($prefix > 0) {
-                    $this->values[$index + 1][$receipt] = self::micros($stageResult->completedAt);
+                    $this->values[$index + 1][$receipt] = WorkingTime::micros($stageResult->completedAt);
                 }
             }
 
-            $this->values[0][$receipt] = self::micros($result->planningStartAt);
+            $this->values[0][$receipt] = WorkingTime::micros($result->planningStartAt);
         } catch (RuntimeException $exception) {
             if (! $this->availabilityFailure($exception)) {
                 throw $exception;
@@ -423,6 +420,10 @@ final class ReverseDeliveryPlanner
     {
         while ($exception->getPrevious() instanceof RuntimeException) {
             $exception = $exception->getPrevious();
+        }
+
+        if ($exception instanceof WorkingTimeSearchException) {
+            return true;
         }
 
         $file = str_replace('\\', '/', $exception->getFile());
@@ -457,13 +458,13 @@ final class ReverseDeliveryPlanner
     {
         $profile = $stage['profile'];
         $zone = $this->plan['profile_timezones'][$profile];
-        $source = self::instant($input)->setTimezone($zone);
+        $source = WorkingTime::fromMicros($input)->setTimezone($zone);
         $key = $profile.'|'.$source->toDateString().'|'.$stage['days'];
 
         if (! array_key_exists($key, $this->destinationDates)) {
             $destination = null;
             $count = 0;
-            $lastLabel = self::instant($this->target)->setTimezone($zone)->toDateString();
+            $lastLabel = WorkingTime::fromMicros($this->target)->setTimezone($zone)->toDateString();
 
             for ($label = WorkingTimeBoundary::labelAfter($source->toDateString(), 1); $label <= $lastLabel; $label = WorkingTimeBoundary::labelAfter($label, 1)) {
                 $date = WorkingTimeBoundary::date($label, new DateTimeZone($zone));
@@ -495,7 +496,7 @@ final class ReverseDeliveryPlanner
                     $clock = $transition['ts'] + $offset - $destinationBase;
 
                     if ($clock >= 0 && $clock <= 86400) {
-                        $events[] = ($sourceBase + $clock - $source->getOffset()) * 1000000;
+                        $events[] = WorkingTime::micros(CarbonImmutable::createFromTimestamp($sourceBase + $clock - $source->getOffset(), 'UTC'));
                     }
                 }
             }
@@ -519,34 +520,31 @@ final class ReverseDeliveryPlanner
             $date = $this->civilStart($label, $zone);
 
             if ($date !== null) {
-                $events[] = self::micros($date);
+                $events[] = WorkingTime::micros($date);
             }
         }
 
         $transitions = (new DateTimeZone($zone))->getTransitions(intdiv($this->start, 1000000) - 1, intdiv($this->target, 1000000) + 1) ?: [];
 
         foreach (array_slice($transitions, 1) as $transition) {
-            $instant = self::instant($transition['ts'] * 1000000);
+            $instant = CarbonImmutable::createFromTimestamp($transition['ts'], 'UTC');
 
             if ($instant->setTimezone($zone)->toDateString() < $instant->subSecond()->setTimezone($zone)->toDateString()) {
                 throw $this->unprovable('Timezone ['.$zone.'] moves backward across a civil-date label in the search window.');
             }
 
-            $events[] = self::micros($instant);
+            $events[] = WorkingTime::micros($instant);
         }
 
         return $this->zoneEvents[$zone] = $this->ordered($events);
     }
 
     /**
-     * Validate the time-calendar proof once, including overnight carry-in. Enhanced boundaries
-     * use their actual strict resolver; legacy rows retain elapsed-midnight arithmetic. A legacy
-     * row spilling past its receiving date or based on an ambiguous midnight is not proven here.
+     * Validate exact effective intervals once, including overnight carry-in. The same strict
+     * wall-clock materialization is used by the forward engine and capacity pruning.
      */
     private function validateTimeCalendar(string $profile, string $zone): void
     {
-        $enhanced = WorkingHours::hasEnhancedConfig(($this->resolveProfileConfig)($profile));
-        $this->enhancedProfiles[$profile] = $enhanced;
         $timezone = new DateTimeZone($zone);
         $this->workingIntervals[$profile] = [];
 
@@ -559,49 +557,14 @@ final class ReverseDeliveryPlanner
 
             $date = $date->setTimezone($timezone);
 
-            $windows = $this->calculators[$profile]->workingWindowsFor($date);
-
-            if ($windows === []) {
-                continue;
-            }
-
-            $endOfDate = null;
-
-            if (! $enhanced) {
-                // Strict resolution detects a repeated midnight without changing legacy APIs.
-                try {
-                    WorkingTimeBoundary::at($profile, $label, 0, $timezone, true);
-                } catch (WorkdayConfigurationException $exception) {
-                    throw $this->unprovable('Legacy profile ['.$profile.'] has an ambiguous midnight on ['.$label.'].', $exception);
-                }
-
-                for ($next = 1; $next <= 3 && $endOfDate === null; $next++) {
-                    $endOfDate = $this->civilStart(WorkingTimeBoundary::labelAfter($label, $next), $zone);
-                }
-
-                if ($endOfDate === null) {
-                    throw $this->unprovable('A legacy receiving-date boundary cannot be represented.');
-                }
-            }
-
-            foreach ($windows as $window) {
-                $start = $enhanced
-                    ? WorkingTimeBoundary::at($profile, $label, $window->startMinutes(), $timezone, $window->startMinutes() === 0)
-                    : $date->startOfDay()->addMinutes($window->startMinutes());
-                $end = $enhanced
-                    ? WorkingTimeBoundary::at($profile, $label, $window->endMinutes(), $timezone, $window->endMinutes() === 1440)
-                    : $date->startOfDay()->addMinutes($window->endMinutes());
+            foreach ($this->calculators[$profile]->workingIntervalsFor($date) as [$start, $end]) {
 
                 if ($end->lessThanOrEqualTo($start)) {
                     throw $this->unprovable('A working interval has nonpositive elapsed length.');
                 }
 
-                if (! $enhanced && ($start->toDateString() !== $label || $end->greaterThan($endOfDate))) {
-                    throw $this->unprovable('Legacy working hours for profile ['.$profile.'] spill past civil date ['.$label.']; use explicit enhanced wall-clock schedules.');
-                }
-
-                if (self::micros($end) > $this->start && self::micros($start) <= $this->target) {
-                    $this->workingIntervals[$profile][] = [self::micros($start), self::micros($end)];
+                if (WorkingTime::micros($end) > $this->start && WorkingTime::micros($start) <= $this->target) {
+                    $this->workingIntervals[$profile][] = [WorkingTime::micros($start), WorkingTime::micros($end)];
                 }
             }
         }
@@ -609,8 +572,7 @@ final class ReverseDeliveryPlanner
 
     /**
      * Calendar evidence only excludes impossible cells. It never substitutes a successful
-     * forward evaluation. Legacy capacity uses its integer-second, per-window minute floor;
-     * enhanced capacity uses aggregate exact elapsed time. Neither can exclude an on-time plan.
+     * forward evaluation. Aggregate exact elapsed capacity cannot exclude an on-time plan.
      */
     private function hasOnTimeCapacity(array $stage, int $input): bool
     {
@@ -640,7 +602,6 @@ final class ReverseDeliveryPlanner
             return false;
         }
 
-        $upperMinutes = 0;
         $elapsed = 0;
         $hasStart = false;
 
@@ -655,22 +616,17 @@ final class ReverseDeliveryPlanner
 
             if ($end > $begin) {
                 $elapsed += $end - $begin;
-                $upperMinutes += intdiv(self::seconds($end) - self::seconds($begin), 60);
             }
         }
 
-        if ($this->enhancedProfiles[$stage['profile']]) {
-            $upperMinutes = intdiv($elapsed, 60000000);
-        }
-
-        return $hasStart && ($stage['minutes'] === 0 || $upperMinutes >= $stage['minutes']);
+        return $hasStart && ($stage['minutes'] === 0 || $elapsed >= WorkingTime::minutes($stage['minutes']));
     }
 
     /** Date-label enumeration, not elapsed 24-hour stepping. @return list<string> */
     private function dateLabels(string $zone, bool $carry = false): array
     {
-        $first = self::instant($this->start)->setTimezone($zone)->toDateString();
-        $last = self::instant($this->target)->setTimezone($zone)->toDateString();
+        $first = WorkingTime::fromMicros($this->start)->setTimezone($zone)->toDateString();
+        $last = WorkingTime::fromMicros($this->target)->setTimezone($zone)->toDateString();
         $labels = [];
 
         for ($label = WorkingTimeBoundary::labelAfter($first, $carry ? -1 : 0); $label <= $last; $label = WorkingTimeBoundary::labelAfter($label, 1)) {
@@ -767,34 +723,5 @@ final class ReverseDeliveryPlanner
         }
 
         return $copy;
-    }
-
-    private static function micros(CarbonImmutable $instant): int
-    {
-        $seconds = $instant->getTimestamp();
-
-        if ($seconds < intdiv(PHP_INT_MIN, 1000000) || $seconds > intdiv(PHP_INT_MAX - 999999, 1000000)) {
-            throw new InvalidArgumentException('Reverse delivery timestamps must fit the signed integer microsecond range.');
-        }
-
-        return $seconds * 1000000 + (int) $instant->format('u');
-    }
-
-    private static function instant(int $micros): CarbonImmutable
-    {
-        $seconds = intdiv($micros, 1000000);
-        $fraction = $micros % 1000000;
-
-        if ($fraction < 0) {
-            $seconds--;
-            $fraction += 1000000;
-        }
-
-        return CarbonImmutable::createFromTimestamp($seconds, 'UTC')->setMicrosecond($fraction);
-    }
-
-    private static function seconds(int $micros): int
-    {
-        return intdiv($micros, 1000000) - ($micros % 1000000 < 0 ? 1 : 0);
     }
 }

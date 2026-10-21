@@ -6,10 +6,12 @@ namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 
 use Carbon\CarbonImmutable;
 use Illuminate\Contracts\Validation\ValidationRule;
-use Illuminate\Support\Facades\Artisan;
 use Illuminate\Support\Facades\Validator;
 use InvalidArgumentException;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
+use PHPUnit\Framework\Attributes\DataProvider;
+use Zarbinco\LaravelWorkdays\Configuration\DefinitionSource;
+use Zarbinco\LaravelWorkdays\Configuration\WorkdayDefinitions;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Rules\WorkdayRule;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
@@ -209,7 +211,7 @@ final class ValidationRulesTest extends TestCase
                 '2026-06-29' => 'Company holiday',
             ],
         ]);
-        config()->set('workdays.default_profile', 'global');
+        config()->set('workdays.definitions.default_profile', 'global');
 
         $validator = $this->validator('delivery_date', '2026-06-29', WorkdayRule::businessDay());
 
@@ -223,7 +225,7 @@ final class ValidationRulesTest extends TestCase
                 '2026-06-29' => 'Company holiday',
             ],
         ]);
-        config()->set('workdays.default_profile', 'global');
+        config()->set('workdays.definitions.default_profile', 'global');
 
         $validator = $this->validator('delivery_date', '2026-06-29', WorkdayRule::businessDay('iran'));
 
@@ -242,13 +244,10 @@ final class ValidationRulesTest extends TestCase
         $this->assertSame('Please choose a working day.', $validator->errors()->first('delivery_date'));
     }
 
-    public function test_validation_rule_respects_imported_official_iran_holiday(): void
+    public function test_validation_rule_respects_config_defined_iran_holiday(): void
     {
-        $this->loadWorkdayMigrations();
-        config()->set('workdays.storage.driver', 'database');
-        Artisan::call('workdays:import-iran-calendar', [
-            'year' => 1405,
-            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
+        $this->setProfileConfig('iran', [
+            'custom_holidays' => ['2026-03-21' => 'Official calendar entry supplied by Config'],
         ]);
 
         $validator = $this->validator('delivery_date', '2026-03-21', WorkdayRule::businessDay('iran'));
@@ -258,28 +257,62 @@ final class ValidationRulesTest extends TestCase
 
     public function test_business_time_rule_respects_extra_working_day_over_holiday(): void
     {
-        $this->loadWorkdayMigrations();
-        config()->set('workdays.storage.driver', 'database');
         $this->setProfileConfig('iran', [
+            'custom_holidays' => ['2026-03-21' => 'Official calendar entry supplied by Config'],
+            'extra_working_days' => ['2026-03-21' => 'Compensation working day'],
             'working_hours' => [
                 'Saturday' => [['09:00', '17:00']],
             ],
         ]);
-        Artisan::call('workdays:import-iran-calendar', [
-            'year' => 1405,
-            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
-        ]);
-        WorkdaySpecialDate::create([
-            'profile' => 'iran',
-            'date' => '2026-03-21',
-            'type' => 'working_day',
-            'title' => 'Compensation working day',
-            'is_active' => true,
-        ]);
-
         $validator = $this->validator('starts_at', '2026-03-21 10:00', WorkdayRule::businessTime('iran'));
 
         $this->assertFalse($validator->fails());
+    }
+
+    #[DataProvider('sourceFailureRuleKinds')]
+    public function test_rule_source_failures_are_not_disguised_as_invalid_user_input(string $kind): void
+    {
+        config()->set('workdays.driver', 'database');
+        $rule = match ($kind) {
+            'day' => WorkdayRule::businessDay('global'),
+            'time' => WorkdayRule::businessTime('global'),
+            'relative' => WorkdayRule::afterBusinessDays(1, '2026-06-26', 'global'),
+        };
+        $validator = $this->validator('delivery_date', '2026-06-29 10:00:00', $rule);
+
+        $this->expectException(DefinitionSourceException::class);
+        $this->expectExceptionMessage('definitions migration');
+
+        $validator->fails();
+    }
+
+    public static function sourceFailureRuleKinds(): array
+    {
+        return [['day'], ['time'], ['relative']];
+    }
+
+    public function test_validation_rules_follow_the_bound_source_instead_of_file_profiles(): void
+    {
+        $source = new class implements DefinitionSource
+        {
+            public int $opened = 0;
+
+            public function open(): WorkdayDefinitions
+            {
+                $this->opened++;
+
+                return new WorkdayDefinitions(['default_profile' => 'source_only', 'include_start_date' => false,
+                    'hijri' => ['method' => 'mathematical', 'adjustment' => 0]],
+                    static fn (string $name): array => ['weekends' => [], 'custom_holidays' => ['2026-06-29' => 'Bound source holiday'],
+                        'working_hours' => ['Tuesday' => [['10:00', '11:00']]]],
+                    static fn (string $name): bool => $name === 'source_only');
+            }
+        };
+        $this->app->instance(DefinitionSource::class, $source);
+
+        $this->assertTrue($this->validator('date', '2026-06-29', WorkdayRule::businessDay())->fails());
+        $this->assertFalse($this->validator('time', '2026-06-30 10:15:00', WorkdayRule::businessTime())->fails());
+        $this->assertSame(2, $source->opened);
     }
 
     private function validator(string $attribute, mixed $value, ValidationRule $rule): \Illuminate\Contracts\Validation\Validator
@@ -309,13 +342,8 @@ final class ValidationRulesTest extends TestCase
     private function setProfileConfig(string $profile, array $overrides): void
     {
         $config = config('workdays');
-        $config['profiles'][$profile] = array_replace_recursive($config['profiles'][$profile], $overrides);
+        $config['definitions']['profiles'][$profile] = array_replace_recursive($config['definitions']['profiles'][$profile], $overrides);
 
         config()->set('workdays', $config);
-    }
-
-    private function loadWorkdayMigrations(): void
-    {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
     }
 }

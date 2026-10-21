@@ -14,14 +14,14 @@ use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\Holiday;
 use Zarbinco\LaravelWorkdays\Data\SlaResult;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
-use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
+use Zarbinco\LaravelWorkdays\Holidays\LogicalHolidayProvider;
 use Zarbinco\LaravelWorkdays\Sla\SlaEvaluator;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
@@ -33,17 +33,17 @@ final class BusinessSlaTest extends TestCase
         parent::setUp();
 
         config()->set('app.timezone', 'Pacific/Honolulu');
-        config()->set('workdays.default_profile', 'support');
-        config()->set('workdays.storage.driver', 'config');
+        config()->set('workdays.definitions.default_profile', 'support');
+        config()->set('workdays.driver', 'config');
         config()->set('workdays.max_scan_days', 31);
-        config()->set('workdays.hijri', ['method' => 'mathematical', 'adjustment' => 0]);
-        config()->set('workdays.profiles', ['support' => $this->profile()]);
+        config()->set('workdays.definitions.hijri', ['method' => 'mathematical', 'adjustment' => 0]);
+        config()->set('workdays.definitions.profiles', ['support' => $this->profile()]);
     }
 
     #[DataProvider('ordinaryDstWallClockCases')]
     public function test_microfix_ordinary_dst_working_boundaries_use_configured_wall_clock_times(string $timezone, array $hours, string $started, string $evaluated, string $due, int $consumed, int $remaining): void
     {
-        config()->set('workdays.profiles.support', array_replace($this->profile(), ['weekends' => [], 'working_hours' => $hours]));
+        config()->set('workdays.definitions.profiles.support', array_replace($this->profile(), ['weekends' => [], 'working_hours' => $hours]));
 
         $result = $this->evaluate($started, $evaluated, ['timezone' => $timezone, 'target_minutes' => 60]);
 
@@ -69,7 +69,7 @@ final class BusinessSlaTest extends TestCase
     #[DataProvider('ordinaryInvalidDstBoundaries')]
     public function test_microfix_ordinary_profiles_reject_nonexistent_and_ambiguous_scheduled_boundaries(string $started, array $hours): void
     {
-        config()->set('workdays.profiles.support', array_replace($this->profile(), ['weekends' => [], 'working_hours' => $hours]));
+        config()->set('workdays.definitions.profiles.support', array_replace($this->profile(), ['weekends' => [], 'working_hours' => $hours]));
         $this->expectException(WorkdayConfigurationException::class);
         $this->expectExceptionMessage('support');
 
@@ -84,10 +84,11 @@ final class BusinessSlaTest extends TestCase
         ];
     }
 
-    public function test_microfix_ordinary_midnight_fragment_uses_first_real_instant_on_skipped_midnight_date(): void
+    public function test_overnight_derived_midnight_fragment_uses_first_real_instant_on_skipped_midnight_date(): void
     {
-        config()->set('workdays.profiles.support', array_replace($this->profile(), [
-            'weekends' => [], 'working_hours' => ['Sunday' => [['00:00', '03:00']]],
+        config()->set('workdays.definitions.profiles.support', array_replace($this->profile(), [
+            'weekends' => [], 'allow_overnight_working_hours' => true,
+            'working_hours' => ['Saturday' => [['22:00', '03:00']]],
         ]));
 
         $result = $this->evaluate('2026-09-06T01:00:00-03:00', '2026-09-06T03:00:00-03:00', ['timezone' => 'America/Santiago', 'target_minutes' => 120]);
@@ -101,7 +102,7 @@ final class BusinessSlaTest extends TestCase
     #[DataProvider('ordinaryDstPauseCases')]
     public function test_microfix_ordinary_dst_pauses_use_elapsed_intersections_and_exact_closing_breach_boundary(string $started, string $evaluated, array $pause, int $target, string $due): void
     {
-        config()->set('workdays.profiles.support', array_replace($this->profile(), ['weekends' => [], 'working_hours' => ['Sunday' => [['00:00', '04:00']]]]));
+        config()->set('workdays.definitions.profiles.support', array_replace($this->profile(), ['weekends' => [], 'working_hours' => ['Sunday' => [['00:00', '04:00']]]]));
         $options = ['timezone' => 'America/New_York', 'target_minutes' => $target, 'pauses' => [$pause]];
 
         $exact = $this->evaluate($started, $evaluated, $options);
@@ -257,7 +258,7 @@ final class BusinessSlaTest extends TestCase
 
     public function test_h_pause_spanning_lunch_deducts_only_its_two_working_intersections(): void
     {
-        config()->set('workdays.profiles.support.working_hours', $this->hours([['09:00', '12:00'], ['13:00', '17:00']]));
+        config()->set('workdays.definitions.profiles.support.working_hours', $this->hours([['09:00', '12:00'], ['13:00', '17:00']]));
 
         $result = $this->evaluate('2026-11-02T09:00:00Z', '2026-11-02T14:00:00Z', [
             'pauses' => [$this->pause('2026-11-02T11:30:00Z', '2026-11-02T13:30:00Z')],
@@ -307,7 +308,7 @@ final class BusinessSlaTest extends TestCase
 
     public function test_pause_spanning_weekend_and_holiday_only_deducts_eligible_working_time(): void
     {
-        config()->set('workdays.profiles.support.custom_holidays', ['2026-11-09' => 'Monday closure']);
+        config()->set('workdays.definitions.profiles.support.custom_holidays', ['2026-11-09' => 'Monday closure']);
 
         $result = $this->evaluate('2026-11-06T16:00:00Z', '2026-11-10T11:00:00Z', [
             'pauses' => [$this->pause('2026-11-06T16:30:00Z', '2026-11-10T09:30:00Z')],
@@ -331,12 +332,12 @@ final class BusinessSlaTest extends TestCase
         $this->assertFalse($result->paused);
     }
 
-    #[DataProvider('legacyPrecisionModes')]
-    public function test_sla_exact_arithmetic_does_not_inherit_or_modify_legacy_whole_minute_rounding(?bool $overnight): void
+    #[DataProvider('equivalentOvernightCapabilities')]
+    public function test_no_pause_sla_and_core_share_exact_arithmetic_for_equivalent_overnight_capabilities(?bool $overnight): void
     {
-        config()->set('workdays.profiles.support.working_hours', ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]]);
+        config()->set('workdays.definitions.profiles.support.working_hours', ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]]);
         if ($overnight !== null) {
-            config()->set('workdays.profiles.support.allow_overnight_working_hours', $overnight);
+            config()->set('workdays.definitions.profiles.support.allow_overnight_working_hours', $overnight);
         }
         $before = Workday::profile('support')->addBusinessMinutes('2026-11-02 09:59:30.123456', 2);
 
@@ -346,17 +347,17 @@ final class BusinessSlaTest extends TestCase
         $this->assertSame(1, $result->consumedWorkingMinutes);
         $this->assertSame(1, $result->remainingWorkingMinutes);
         $this->assertSame($this->format($before), $this->format(Workday::profile('support')->addBusinessMinutes('2026-11-02 09:59:30.123456', 2)));
-        $this->assertSame($overnight === true ? '2026-11-02T11:01:30.123456+00:00' : '2026-11-02T11:02:00.000000+00:00', $this->format($before));
+        $this->assertSame($this->format($result->dueAt), $this->format($before));
     }
 
-    public static function legacyPrecisionModes(): array
+    public static function equivalentOvernightCapabilities(): array
     {
         return [[null], [false], [true]];
     }
 
     public function test_sub_minute_active_and_paused_fragments_are_accumulated_before_rounding(): void
     {
-        config()->set('workdays.profiles.support.working_hours', ['Monday' => [['09:00', '09:01'], ['09:02', '09:03']]]);
+        config()->set('workdays.definitions.profiles.support.working_hours', ['Monday' => [['09:00', '09:01'], ['09:02', '09:03']]]);
 
         $result = $this->evaluate('2026-11-02T09:00:00Z', '2026-11-02T09:03:00Z', [
             'target_minutes' => 1,
@@ -388,7 +389,7 @@ final class BusinessSlaTest extends TestCase
     public function test_existing_calendar_hours_holidays_and_overrides_determine_sla_deadlines(array $configuration, string $started, int $target, string $due): void
     {
         foreach ($configuration as $key => $value) {
-            config()->set('workdays.profiles.support.'.$key, $value);
+            config()->set('workdays.definitions.profiles.support.'.$key, $value);
         }
 
         $result = $this->evaluate($started, $started, ['target_minutes' => $target]);
@@ -422,9 +423,9 @@ final class BusinessSlaTest extends TestCase
     public function test_hijri_recurring_holiday_uses_the_existing_selected_calendar_method(): void
     {
         $holiday = (new HijriCalendarAdapter('mathematical', 0))->hijriDateToGregorian(1446, 8, 15);
-        config()->set('workdays.profiles.support.weekends', []);
-        config()->set('workdays.profiles.support.working_hours', array_fill_keys(range(1, 7), [['09:00', '17:00']]));
-        config()->set('workdays.profiles.support.holidays.hijri', ['08-15' => 'Hijri closure']);
+        config()->set('workdays.definitions.profiles.support.weekends', []);
+        config()->set('workdays.definitions.profiles.support.working_hours', array_fill_keys(range(1, 7), [['09:00', '17:00']]));
+        config()->set('workdays.definitions.profiles.support.holidays.hijri', ['08-15' => 'Hijri closure']);
 
         $result = $this->evaluate($holiday->toDateString().'T10:00:00Z', $holiday->toDateString().'T10:00:00Z', ['target_minutes' => 60]);
 
@@ -433,7 +434,7 @@ final class BusinessSlaTest extends TestCase
 
     public function test_overnight_pause_spans_midnight_once_and_carry_in_survives_receiving_holiday(): void
     {
-        config()->set('workdays.profiles.support', array_replace($this->profile(), [
+        config()->set('workdays.definitions.profiles.support', array_replace($this->profile(), [
             'allow_overnight_working_hours' => true, 'working_hours' => ['Monday' => [['22:00', '06:00']]],
             'custom_holidays' => ['2026-11-03' => 'Receiving closure'],
         ]));
@@ -451,7 +452,7 @@ final class BusinessSlaTest extends TestCase
 
     public function test_midnight_fractional_arithmetic_and_overlapping_carry_in_are_not_double_counted(): void
     {
-        config()->set('workdays.profiles.support', array_replace($this->profile(), [
+        config()->set('workdays.definitions.profiles.support', array_replace($this->profile(), [
             'allow_overnight_working_hours' => true,
             'working_hours' => ['Monday' => [['22:00', '06:00']], 'Tuesday' => [['05:00', '09:00']]],
         ]));
@@ -629,8 +630,8 @@ final class BusinessSlaTest extends TestCase
 
     public function test_fold_instants_with_explicit_offsets_and_datetime_objects_are_accepted(): void
     {
-        config()->set('workdays.profiles.support.weekends', []);
-        config()->set('workdays.profiles.support.working_hours', ['Sunday' => [['00:00', '04:00']]]);
+        config()->set('workdays.definitions.profiles.support.weekends', []);
+        config()->set('workdays.definitions.profiles.support.working_hours', ['Sunday' => [['00:00', '04:00']]]);
         $start = new DateTimeImmutable('2026-11-01T01:30:00-04:00');
         $evaluated = new DateTimeImmutable('2026-11-01T01:30:00-05:00');
 
@@ -646,7 +647,7 @@ final class BusinessSlaTest extends TestCase
     #[DataProvider('dstOvernightCases')]
     public function test_dst_overnight_windows_and_pauses_use_actual_elapsed_minutes(string $start, string $end, int $minutes, string $timezone, ?array $pause): void
     {
-        config()->set('workdays.profiles.support', array_replace($this->profile(), [
+        config()->set('workdays.definitions.profiles.support', array_replace($this->profile(), [
             'weekends' => [], 'allow_overnight_working_hours' => true, 'working_hours' => ['Saturday' => [['22:00', '06:00']]],
         ]));
         $result = $this->evaluate($start, $end, ['timezone' => $timezone, 'target_minutes' => $minutes, 'pauses' => $pause === null ? [] : [$pause]]);
@@ -671,9 +672,9 @@ final class BusinessSlaTest extends TestCase
     #[DataProvider('invalidWorkingBoundaries')]
     public function test_invalid_or_ambiguous_configured_dst_window_boundaries_do_not_fabricate_time(string $start, string $timezone, array $hours): void
     {
-        config()->set('workdays.profiles.support.weekends', []);
-        config()->set('workdays.profiles.support.special_working_hours', []);
-        config()->set('workdays.profiles.support.working_hours', $hours);
+        config()->set('workdays.definitions.profiles.support.weekends', []);
+        config()->set('workdays.definitions.profiles.support.special_working_hours', []);
+        config()->set('workdays.definitions.profiles.support.working_hours', $hours);
         $this->expectException(WorkdayConfigurationException::class);
 
         $this->evaluate($start, $start, ['timezone' => $timezone, 'target_minutes' => 60]);
@@ -712,7 +713,7 @@ final class BusinessSlaTest extends TestCase
     public function test_unavailable_calendar_fails_with_profile_and_limit_instead_of_inventing_a_due_date(): void
     {
         config()->set('workdays.max_scan_days', 3);
-        config()->set('workdays.profiles.support.working_hours', []);
+        config()->set('workdays.definitions.profiles.support.working_hours', []);
         $this->expectException(RuntimeException::class);
         $this->expectExceptionMessageMatches('/(?=.*support)(?=.*3)/s');
 
@@ -722,7 +723,7 @@ final class BusinessSlaTest extends TestCase
     public function test_open_pause_with_unknown_due_date_does_not_require_future_availability(): void
     {
         config()->set('workdays.max_scan_days', 1);
-        config()->set('workdays.profiles.support.working_hours', []);
+        config()->set('workdays.definitions.profiles.support.working_hours', []);
 
         $result = $this->evaluate('2026-11-02T09:00:00Z', '2026-11-02T10:00:00Z', [
             'target_minutes' => 1000000, 'pauses' => [$this->pause('2026-11-02T09:00:00Z', null)],
@@ -754,8 +755,8 @@ final class BusinessSlaTest extends TestCase
     public function test_next_midnight_deadline_beyond_final_local_date_is_rejected(): void
     {
         config()->set('workdays.max_scan_days', 1);
-        config()->set('workdays.profiles.support.allow_overnight_working_hours', true);
-        config()->set('workdays.profiles.support.working_hours', ['Tuesday' => [['23:00', '24:00']]]);
+        config()->set('workdays.definitions.profiles.support.allow_overnight_working_hours', true);
+        config()->set('workdays.definitions.profiles.support.working_hours', ['Tuesday' => [['23:00', '24:00']]]);
         $this->expectException(RuntimeException::class);
 
         $this->evaluate('2026-11-02T09:00:00Z', '2026-11-02T09:00:00Z', ['target_minutes' => 60]);
@@ -764,8 +765,8 @@ final class BusinessSlaTest extends TestCase
     public function test_skipped_apia_date_does_not_extend_the_date_label_horizon(): void
     {
         config()->set('workdays.max_scan_days', 1);
-        config()->set('workdays.profiles.support.weekends', []);
-        config()->set('workdays.profiles.support.working_hours', array_fill_keys(range(1, 7), [['09:00', '17:00']]));
+        config()->set('workdays.definitions.profiles.support.weekends', []);
+        config()->set('workdays.definitions.profiles.support.working_hours', array_fill_keys(range(1, 7), [['09:00', '17:00']]));
         try {
             $this->evaluate('2011-12-29T18:00:00-10:00', '2011-12-29T18:00:00-10:00', ['timezone' => 'Pacific/Apia', 'target_minutes' => 60]);
             $this->fail('Skipped civil date extended the one-day horizon.');
@@ -835,13 +836,13 @@ final class BusinessSlaTest extends TestCase
         $this->assertSame(['profile' => 'support', 'timezone' => 'UTC', 'target_minutes' => 240], $options);
     }
 
-    public function test_database_holidays_recurring_rules_and_reopened_days_are_respected_without_writes(): void
+    public function test_config_holidays_recurring_rules_and_reopenings_require_no_database_access(): void
     {
-        $this->databaseStorage();
-        WorkdaySpecialDate::create(['profile' => 'support', 'date' => '2026-11-03', 'type' => 'holiday', 'title' => 'Tuesday closure', 'is_active' => true]);
-        WorkdayHolidayRule::create(['profile' => 'support', 'calendar_type' => 'gregorian', 'month' => 11, 'day' => 4, 'title' => 'Wednesday recurring closure', 'is_active' => true]);
-        WorkdaySpecialDate::create(['profile' => 'support', 'date' => '2026-11-07', 'type' => 'working_day', 'title' => 'Extra Saturday', 'is_active' => true]);
-        config()->set('workdays.profiles.support.extra_working_day_hours', [['10:00', '14:00']]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.support.custom_holidays', ['2026-11-03' => 'Tuesday closure']);
+        config()->set('workdays.definitions.profiles.support.holidays.gregorian', ['11-04' => 'Wednesday recurring closure']);
+        config()->set('workdays.definitions.profiles.support.extra_working_days', ['2026-11-07' => 'Extra Saturday']);
+        config()->set('workdays.definitions.profiles.support.extra_working_day_hours', [['10:00', '14:00']]);
         $connection = $this->app['db']->connection();
         $connection->enableQueryLog();
         $connection->flushQueryLog();
@@ -851,51 +852,48 @@ final class BusinessSlaTest extends TestCase
 
         $this->assertSame('2026-11-05T11:00:00.000000+00:00', $this->format($closed->dueAt));
         $this->assertSame('2026-11-07T11:00:00.000000+00:00', $this->format($reopened->dueAt));
-        $this->assertNotEmpty($connection->getQueryLog());
+        $this->assertSame([], $connection->getQueryLog());
         foreach ($connection->getQueryLog() as $query) {
             $this->assertStringStartsWith('select', strtolower(ltrim($query['query'])));
         }
         $connection->disableQueryLog();
-        $this->assertSame(2, WorkdaySpecialDate::count());
-        $this->assertSame(1, WorkdayHolidayRule::count());
     }
 
-    public function test_chain_database_extra_day_reopens_config_holiday_and_later_calls_observe_deactivation(): void
+    public function test_config_extra_day_reopens_its_holiday_and_later_calls_observe_removal(): void
     {
-        $this->databaseStorage('chain');
-        config()->set('workdays.profiles.support.custom_holidays', ['2026-11-03' => 'Config closure']);
-        $reopening = WorkdaySpecialDate::create(['profile' => 'support', 'date' => '2026-11-03', 'type' => 'working_day', 'title' => 'Database reopening', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.support.custom_holidays', ['2026-11-03' => 'Config closure']);
+        config()->set('workdays.definitions.profiles.support.extra_working_days', ['2026-11-03' => 'Config reopening']);
 
         $first = $this->evaluate('2026-11-02T15:00:00Z', '2026-11-03T10:00:00Z');
-        $reopening->update(['is_active' => false]);
+        config()->set('workdays.definitions.profiles.support.extra_working_days', []);
         $second = $this->evaluate('2026-11-02T15:00:00Z', '2026-11-03T10:00:00Z');
 
         $this->assertSame('2026-11-03T11:00:00.000000+00:00', $this->format($first->dueAt));
         $this->assertSame('2026-11-04T11:00:00.000000+00:00', $this->format($second->dueAt));
     }
 
-    public function test_database_storage_does_not_apply_config_holiday_maps(): void
+    public function test_config_holiday_cannot_be_used_when_database_schema_is_missing(): void
     {
-        $this->databaseStorage();
-        config()->set('workdays.profiles.support.custom_holidays', ['2026-11-03' => 'Config ignored by database driver']);
+        config()->set('workdays.driver', 'database');
+        config()->set('workdays.definitions.profiles.support.custom_holidays', ['2026-11-03' => 'Config ignored by database driver']);
+        $this->expectException(DefinitionSourceException::class);
+        $this->expectExceptionMessage('definitions migration');
 
-        $result = $this->evaluate('2026-11-02T15:00:00Z', '2026-11-03T10:00:00Z');
-
-        $this->assertSame('2026-11-03T11:00:00.000000+00:00', $this->format($result->dueAt));
+        $this->evaluate('2026-11-02T15:00:00Z', '2026-11-03T10:00:00Z');
     }
 
-    public function test_inherited_effective_child_schedule_is_used_without_inheriting_parent_database_rows_or_routing(): void
+    public function test_inherited_config_child_schedule_ignores_conflicting_database_definitions_and_unused_routing(): void
     {
-        $this->databaseStorage('chain');
-        config()->set('workdays.profiles', ['support_base' => $this->profile(), 'support_priority' => [
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles', ['support_base' => $this->profile(), 'support_priority' => [
             'extends' => 'support_base', 'working_hours' => ['Thursday' => [['09:00', '20:00']]],
         ]]);
-        config()->set('workdays.profile_routing', ['invalid' => true]);
-        WorkdaySpecialDate::create(['profile' => 'support_base', 'date' => '2026-11-05', 'type' => 'holiday', 'title' => 'Parent only', 'is_active' => true]);
+        config()->set('workdays.definitions.profile_routing', ['invalid' => true]);
         $options = ['profile' => 'support_priority', 'target_minutes' => 180];
 
         $result = $this->evaluate('2026-11-05T16:00:00Z', '2026-11-05T17:00:00Z', $options);
-        WorkdaySpecialDate::create(['profile' => 'support_priority', 'date' => '2026-11-05', 'type' => 'holiday', 'title' => 'Selected child', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.support_priority.custom_holidays', ['2026-11-05' => 'Selected child closure']);
         $closed = $this->evaluate('2026-11-05T16:00:00Z', '2026-11-05T17:00:00Z', $options);
 
         $this->assertSame('support_priority', $result->profile);
@@ -903,9 +901,9 @@ final class BusinessSlaTest extends TestCase
         $this->assertSame('2026-11-06T12:00:00.000000+00:00', $this->format($closed->dueAt));
     }
 
-    public function test_database_date_reads_do_not_multiply_with_pause_fragments(): void
+    public function test_config_sla_with_many_pause_fragments_performs_no_database_reads(): void
     {
-        $this->databaseStorage();
+        $this->publishConflictingDatabaseDefinitions();
         $connection = $this->app['db']->connection();
         $connection->enableQueryLog();
         $connection->flushQueryLog();
@@ -920,8 +918,8 @@ final class BusinessSlaTest extends TestCase
 
         $this->assertSame('2026-11-03T11:00:00.000000+00:00', $this->format($plain->dueAt));
         $this->assertSame('2026-11-03T12:00:00.000000+00:00', $this->format($paused->dueAt));
-        $this->assertCount(3, $plainQueries);
-        $this->assertCount(3, $pausedQueries);
+        $this->assertCount(0, $plainQueries);
+        $this->assertCount(0, $pausedQueries);
         foreach (array_merge($plainQueries, $pausedQueries) as $query) {
             $this->assertStringStartsWith('select', strtolower(ltrim($query['query'])));
         }
@@ -930,7 +928,7 @@ final class BusinessSlaTest extends TestCase
     public function test_one_calculator_and_effective_profile_are_resolved_and_calendar_dates_are_scanned_once(): void
     {
         $profile = $this->profile();
-        $provider = new class(new ConfigHolidayProvider(['support' => $profile])) implements HolidayProviderInterface
+        $provider = new class(new LogicalHolidayProvider(static fn (string $name): array => $profile)) implements HolidayProviderInterface
         {
             public array $dates = [];
 
@@ -970,12 +968,12 @@ final class BusinessSlaTest extends TestCase
         $evaluator = new SlaEvaluator(function (string $name, int $limit) use (&$resolved, $profile, $provider): BusinessDayCalculator {
             $resolved[] = [$name, $limit];
 
-            return new BusinessDayCalculator($name, $profile, maxScanDays: $limit, holidayProvider: $provider);
+            return new BusinessDayCalculator($name, $profile, maxScanDays: $limit, holidayProvider: $provider, includeStartDate: false, jalaliCalendar: new JalaliCalendarAdapter, hijriCalendar: new HijriCalendarAdapter('umm_al_qura', 0));
         }, function (string $name) use (&$configured, $profile): array {
             $configured[] = $name;
 
             return $profile;
-        });
+        }, 31);
 
         $result = $evaluator->evaluate('2026-11-02T15:00:00Z', '2026-11-03T11:30:00Z', $this->slaOptions([
             'pauses' => array_fill(0, 1000, $this->pause('2026-11-03T10:00:00Z', '2026-11-03T11:00:00Z')),
@@ -992,7 +990,7 @@ final class BusinessSlaTest extends TestCase
     {
         $profile = $this->profile();
         unset($profile['working_hours']);
-        config()->set('workdays.profiles.support', $profile);
+        config()->set('workdays.definitions.profiles.support', $profile);
         $this->assertTrue(Workday::profile('support')->isBusinessDay('2026-11-02'));
         $this->expectException(WorkdayConfigurationException::class);
 
@@ -1002,7 +1000,7 @@ final class BusinessSlaTest extends TestCase
     #[DataProvider('invalidProfileConfigurations')]
     public function test_invalid_selected_profile_configuration_is_reported_as_an_sla_configuration_error(array $configuration): void
     {
-        config()->set('workdays.profiles.support', $configuration);
+        config()->set('workdays.definitions.profiles.support', $configuration);
         $this->expectException(WorkdayConfigurationException::class);
 
         $this->evaluate('2026-11-02T09:00:00Z', '2026-11-02T10:00:00Z');
@@ -1061,12 +1059,6 @@ final class BusinessSlaTest extends TestCase
     private function pause(string|\DateTimeInterface $started, string|\DateTimeInterface|null $ended): array
     {
         return ['started_at' => $started, 'ended_at' => $ended];
-    }
-
-    private function databaseStorage(string $driver = 'database'): void
-    {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', $driver);
     }
 
     private function format(CarbonImmutable $instant): string

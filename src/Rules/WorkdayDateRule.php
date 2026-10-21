@@ -7,6 +7,7 @@ namespace Zarbinco\LaravelWorkdays\Rules;
 use Closure;
 use Illuminate\Contracts\Validation\ValidationRule;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Rules\Concerns\ParsesRuleDates;
 use Zarbinco\LaravelWorkdays\WorkdayManager;
 
@@ -42,6 +43,8 @@ final class WorkdayDateRule implements ValidationRule
 
         try {
             $result = $this->target()->{$this->method}($date);
+        } catch (DefinitionSourceException $exception) {
+            throw $exception;
         } catch (\Throwable) {
             $fail($this->messageText('The :attribute could not be validated as a workday date.', $attribute));
 

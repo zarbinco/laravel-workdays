@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 namespace Zarbinco\LaravelWorkdays\Support;
 
+use Closure;
 use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Data\ResolvedProfile;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
@@ -11,8 +12,13 @@ use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 /** Selects configured names only; never constructs a calculator or holiday provider. */
 final readonly class ProfileRouter
 {
-    /** @param array<array-key, mixed> $profiles */
-    public function __construct(private array $profiles) {}
+    private Closure $profileExists;
+
+    /** @param callable(string): bool $profileExists Does not enumerate or hydrate a registry. */
+    public function __construct(callable $profileExists)
+    {
+        $this->profileExists = Closure::fromCallable($profileExists);
+    }
 
     /** @param array<array-key, mixed> $context */
     public function resolve(array $context, mixed $routing): ResolvedProfile
@@ -72,7 +78,7 @@ final readonly class ProfileRouter
 
     private function validateTarget(mixed $profile, string $label): void
     {
-        if (! is_string($profile) || trim($profile) === '' || ! array_key_exists($profile, $this->profiles)) {
+        if (! is_string($profile) || trim($profile) === '' || ! ($this->profileExists)($profile)) {
             throw new WorkdayConfigurationException($label.' must reference an existing configured profile name.');
         }
     }

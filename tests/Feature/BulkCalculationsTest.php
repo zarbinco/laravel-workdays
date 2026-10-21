@@ -9,7 +9,6 @@ use DateTime;
 use Error;
 use Hekmatinasser\Jalali\Exceptions\InvalidUnitException;
 use Hekmatinasser\Verta\Verta;
-use Illuminate\Database\Events\QueryExecuted;
 use Illuminate\Filesystem\Filesystem;
 use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
@@ -18,14 +17,15 @@ use Symfony\Component\Process\Process;
 use Throwable;
 use Zarbinco\LaravelWorkdays\Bulk\BulkCalculator;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory;
+use Zarbinco\LaravelWorkdays\Configuration\DefinitionSource;
+use Zarbinco\LaravelWorkdays\Configuration\WorkdayDefinitions;
 use Zarbinco\LaravelWorkdays\Data\BulkCalculationItemResult;
 use Zarbinco\LaravelWorkdays\Data\BulkCalculationResult;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Holidays\DatabaseHolidayProvider;
-use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
 final class BulkCalculationsTest extends TestCase
@@ -35,16 +35,16 @@ final class BulkCalculationsTest extends TestCase
         parent::setUp();
 
         config()->set('app.timezone', 'Pacific/Honolulu');
-        config()->set('workdays.default_profile', 'warehouse');
-        config()->set('workdays.storage.driver', 'config');
-        config()->set('workdays.include_start_date', false);
+        config()->set('workdays.definitions.default_profile', 'warehouse');
+        config()->set('workdays.driver', 'config');
+        config()->set('workdays.definitions.include_start_date', false);
         config()->set('workdays.max_scan_days', 3660);
-        config()->set('workdays.hijri', ['method' => 'mathematical', 'adjustment' => 0]);
+        config()->set('workdays.definitions.hijri', ['method' => 'mathematical', 'adjustment' => 0]);
         $warehouse = $this->profile();
         $warehouse['custom_holidays'] = ['2026-11-05' => 'Config Thursday closure'];
         $warehouse['extra_working_days'] = ['2026-11-07' => 'Config extra Saturday'];
         $warehouse['extra_working_day_hours'] = [['10:00', '14:00']];
-        config()->set('workdays.profiles', [
+        config()->set('workdays.definitions.profiles', [
             'warehouse' => $warehouse,
             'carrier' => array_replace($this->profile(), ['working_hours' => $this->hours([['12:00', '18:00']])]),
             'child' => ['extends' => 'warehouse', 'working_hours' => ['Thursday' => [['10:00', '15:00']]]],
@@ -57,13 +57,6 @@ final class BulkCalculationsTest extends TestCase
     public function test_all_ten_operation_types_preserve_typed_standalone_results_and_serialization_with_each_prefetch_mode(string $driver): void
     {
         $this->storage($driver);
-        if ($driver !== 'config') {
-            $this->seedHoliday('warehouse', '2026-11-03', 'holiday');
-            $this->seedHoliday('warehouse', '2026-11-07', 'working_day');
-            $this->seedHoliday('warehouse', '2026-11-02', 'holiday', false);
-            $this->seedHoliday('child', '2026-11-04', 'holiday');
-            WorkdayHolidayRule::create(['profile' => 'warehouse', 'calendar_type' => 'gregorian', 'month' => 11, 'day' => 6, 'title' => 'Annual Friday closure', 'is_active' => true]);
-        }
         $operations = $this->allOperations();
         $expected = array_map(fn (array $operation): mixed => $this->individual($operation), $operations);
 
@@ -91,15 +84,15 @@ final class BulkCalculationsTest extends TestCase
 
     public static function storageModes(): array
     {
-        return [['config'], ['database'], ['chain']];
+        return [['config']];
     }
 
     #[DataProvider('storageModes')]
     public function test_special_seasonal_overnight_and_twenty_four_hour_windows_keep_individual_semantics(string $driver): void
     {
         $this->storage($driver);
-        config()->set('workdays.profiles.warehouse.special_working_hours', ['2026-11-02' => [['10:00', '13:00']]]);
-        config()->set('workdays.profiles.warehouse.seasonal_working_hours', [['from' => '2026-11-03', 'through' => '2026-11-03', 'weekdays' => ['Tuesday' => [['09:00', '20:00']]]]]);
+        config()->set('workdays.definitions.profiles.warehouse.special_working_hours', ['2026-11-02' => [['10:00', '13:00']]]);
+        config()->set('workdays.definitions.profiles.warehouse.seasonal_working_hours', [['from' => '2026-11-03', 'through' => '2026-11-03', 'weekdays' => ['Tuesday' => [['09:00', '20:00']]]]]);
         $operations = [
             ['id' => 'special', 'operation' => 'working_windows', 'profile' => 'warehouse', 'date' => '2026-11-02'],
             ['id' => 'season', 'operation' => 'add_business_minutes', 'profile' => 'warehouse', 'datetime' => '2026-11-03T16:00:00.123456Z', 'minutes' => 180],
@@ -114,7 +107,7 @@ final class BulkCalculationsTest extends TestCase
     #[DataProvider('dstParityCases')]
     public function test_dst_and_independent_offsets_preserve_the_underlying_operation_results(string $timezone, string $start, string $evaluation, int $target, array $hours): void
     {
-        config()->set('workdays.profiles.dst', array_replace($this->profile(), ['weekends' => [], 'allow_overnight_working_hours' => true, 'working_hours' => $hours]));
+        config()->set('workdays.definitions.profiles.dst', array_replace($this->profile(), ['weekends' => [], 'allow_overnight_working_hours' => true, 'working_hours' => $hours]));
         $operations = [
             ['id' => 'sla', 'operation' => 'evaluate_sla', 'started_at' => $start, 'evaluated_at' => $evaluation,
                 'options' => ['profile' => 'dst', 'timezone' => $timezone, 'target_minutes' => $target]],
@@ -137,9 +130,9 @@ final class BulkCalculationsTest extends TestCase
 
     public function test_jalali_recurrence_and_existing_gregorian_jalali_hijri_holidays_match_individual_calls(): void
     {
-        config()->set('workdays.profiles.warehouse.holidays.gregorian', ['11-02' => 'Annual Gregorian closure']);
-        config()->set('workdays.profiles.warehouse.holidays.jalali', ['04-01' => 'Annual Jalali closure']);
-        config()->set('workdays.profiles.warehouse.holidays.hijri', ['08-15' => 'Annual Hijri closure']);
+        config()->set('workdays.definitions.profiles.warehouse.holidays.gregorian', ['11-02' => 'Annual Gregorian closure']);
+        config()->set('workdays.definitions.profiles.warehouse.holidays.jalali', ['04-01' => 'Annual Jalali closure']);
+        config()->set('workdays.definitions.profiles.warehouse.holidays.hijri', ['08-15' => 'Annual Hijri closure']);
         $hijri = (new HijriCalendarAdapter('mathematical', 0))->hijriDateToGregorian(1446, 8, 15)->toDateString();
         $operations = [
             ['id' => 'gregorian', 'operation' => 'is_business_day', 'profile' => 'warehouse', 'date' => '2026-11-02'],
@@ -154,7 +147,7 @@ final class BulkCalculationsTest extends TestCase
 
     public function test_skipped_civil_dates_and_disconnected_reverse_fold_regions_keep_existing_semantics(): void
     {
-        config()->set('workdays.profiles.everyday', ['weekends' => [], 'holidays' => []]);
+        config()->set('workdays.definitions.profiles.everyday', ['weekends' => [], 'holidays' => []]);
         $plan = ['timezone' => 'America/New_York', 'profile_timezones' => ['everyday' => 'America/New_York'], 'stages' => [['id' => 'transit', 'type' => 'business_days', 'profile' => 'everyday', 'days' => 1]]];
         $operations = [
             ['id' => 'apia', 'operation' => 'recurring_schedule', 'anchor_date' => '2011-12-23', 'options' => [
@@ -216,7 +209,7 @@ final class BulkCalculationsTest extends TestCase
     #[DataProvider('invalidEnvelopes')]
     public function test_invalid_envelope_is_rejected_before_any_database_calculation(array $operations, array $options): void
     {
-        config()->set('workdays.storage.driver', 'database');
+        config()->set('workdays.driver', 'database');
         $this->expectException(WorkdayConfigurationException::class);
 
         Workday::bulkCalculate($operations, $options);
@@ -282,7 +275,7 @@ final class BulkCalculationsTest extends TestCase
             $profiles[$name] = ['extends' => 'base'];
             $operations[] = $this->dayItem('item-'.$index, profile: $name);
         }
-        config()->set('workdays.profiles', $profiles);
+        config()->set('workdays.definitions.profiles', $profiles);
 
         $result = Workday::bulkCalculate($operations);
 
@@ -296,7 +289,7 @@ final class BulkCalculationsTest extends TestCase
         foreach (range(0, 50) as $index) {
             $profiles['p'.$index] = $this->profile();
         }
-        config()->set('workdays.profiles', $profiles);
+        config()->set('workdays.definitions.profiles', $profiles);
         $operations = [];
         foreach ([range(0, 31), range(32, 50)] as $batch => $indexes) {
             $mapping = [];
@@ -318,7 +311,7 @@ final class BulkCalculationsTest extends TestCase
         $plan = $this->workPlan();
         foreach (range(1, 60) as $index) {
             $plan['profile_timezones']['unused'.$index] = 'UTC';
-            config()->set('workdays.profiles.unused'.$index, ['extends' => 'missing-parent']);
+            config()->set('workdays.definitions.profiles.unused'.$index, ['extends' => 'missing-parent']);
         }
 
         $this->assertParity([['id' => 'plan', 'operation' => 'plan_delivery', 'received_at' => '2026-11-02T10:00:00Z', 'plan' => $plan]]);
@@ -360,12 +353,24 @@ final class BulkCalculationsTest extends TestCase
         $this->assertTrue($result->items[1]->success);
     }
 
-    #[DataProvider('errorModes')]
-    public function test_missing_tables_are_visible_infrastructure_failures_even_in_collect_mode(string $mode): void
+    public function test_shared_interval_exhaustion_remains_collectable_and_later_items_run(): void
     {
-        config()->set('workdays.storage.driver', 'database');
+        config()->set('workdays.max_scan_days', 1);
+        config()->set('workdays.definitions.profiles.warehouse.working_hours', []);
+        $operation = ['id' => 'no-work', 'operation' => 'add_business_minutes', 'profile' => 'warehouse', 'datetime' => '2026-11-02T09:00:00Z', 'minutes' => 1];
+        $failure = $this->individualFailure($operation);
+        $result = Workday::bulkCalculate([$operation, $this->dayItem('valid')]);
+        $this->assertSame($failure::class, $result->items[0]->error['type']);
+        $this->assertSame($failure->getMessage(), $result->items[0]->error['message']);
+        $this->assertTrue($result->items[1]->success);
+    }
+
+    #[DataProvider('errorModes')]
+    public function test_unavailable_database_is_a_source_failure_in_both_error_modes(string $mode): void
+    {
+        config()->set('workdays.driver', 'database');
         $this->expectException(RuntimeException::class);
-        $this->expectExceptionMessage('migrations');
+        $this->expectExceptionMessage('definitions migration');
 
         Workday::bulkCalculate([$this->dayItem('cannot-read')], ['on_error' => $mode, 'prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30']]);
     }
@@ -377,7 +382,7 @@ final class BulkCalculationsTest extends TestCase
 
     public function test_unexpected_internal_type_error_is_not_collected_as_a_business_failure(): void
     {
-        $bulk = new BulkCalculator(static function (): never {
+        $bulk = new BulkCalculator(app(CalculationContextFactory::class), static function (): never {
             throw new \TypeError('Unexpected construction programming error.');
         });
         $this->expectException(\TypeError::class);
@@ -386,21 +391,18 @@ final class BulkCalculationsTest extends TestCase
         $bulk->calculate([$this->dayItem('first')], ['on_error' => 'collect']);
     }
 
-    public function test_two_hundred_items_across_five_profiles_match_standalone_with_only_grouped_prefetch_queries(): void
+    public function test_two_hundred_items_across_five_profiles_match_standalone_with_zero_sql(): void
     {
-        $this->storage('database');
         $profiles = [];
         foreach (range(0, 3) as $index) {
             $profiles['p'.$index] = $this->profile() + ['extra_working_day_hours' => [['10:00', '14:00']]];
         }
         $profiles['p4'] = ['extends' => 'p0', 'working_hours' => ['Thursday' => [['09:00', '12:00']]]];
-        config()->set('workdays.profiles', $profiles);
+        config()->set('workdays.definitions.profiles', $profiles);
         foreach (range(0, 4) as $index) {
-            $profile = 'p'.$index;
-            $this->seedHoliday($profile, '2026-11-03', 'holiday');
-            $this->seedHoliday($profile, '2026-11-07', 'working_day');
-            $this->seedHoliday($profile, '2026-11-02', 'holiday', false);
-            WorkdayHolidayRule::create(['profile' => $profile, 'calendar_type' => 'gregorian', 'month' => 11, 'day' => 11, 'title' => 'Annual closure', 'is_active' => true]);
+            config()->set('workdays.definitions.profiles.p'.$index.'.custom_holidays', ['2026-11-03' => 'Closure']);
+            config()->set('workdays.definitions.profiles.p'.$index.'.extra_working_days', ['2026-11-07' => 'Extra Saturday']);
+            config()->set('workdays.definitions.profiles.p'.$index.'.holidays.gregorian', ['11-11' => 'Annual closure']);
         }
         $operations = [];
         foreach (range(0, 199) as $index) {
@@ -428,18 +430,13 @@ final class BulkCalculationsTest extends TestCase
         $this->assertSame(200, $actual->succeeded);
         $this->assertSame(0, $actual->failed);
         $this->assertSame($expected, array_map(fn (BulkCalculationItemResult $item): mixed => $this->serialize($item->result), $actual->items));
-        $this->assertGreaterThan(200, count($standaloneQueries));
-        $this->assertLessThanOrEqual(2, count($bulkQueries));
-        $this->assertCount(1, array_values(array_filter($bulkQueries, static fn (array $query): bool => str_contains($query['query'], 'workday_holiday_rules'))));
-        $this->assertCount(1, array_values(array_filter($bulkQueries, static fn (array $query): bool => str_contains($query['query'], 'workday_special_dates'))));
+        $this->assertSame([], $standaloneQueries);
+        $this->assertSame([], $bulkQueries);
     }
 
-    public function test_prefetch_includes_model_created_rows_on_through_and_single_date_boundaries(): void
+    public function test_config_prefetch_hint_boundaries_preserve_holiday_and_extra_day_precedence(): void
     {
-        $this->storage('database');
-        $this->seedHoliday('warehouse', '2026-11-30', 'holiday');
-        $this->seedHoliday('warehouse', '2026-11-07', 'holiday');
-        $this->seedHoliday('warehouse', '2026-11-07', 'working_day');
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-30' => 'Closure', '2026-11-07' => 'Closure']);
         foreach ([['2026-11-01', '2026-11-30', '2026-11-30', false], ['2026-11-30', '2026-11-30', '2026-11-30', false],
             ['2026-11-01', '2026-11-07', '2026-11-07', true], ['2026-11-07', '2026-11-07', '2026-11-07', true],
         ] as [$from, $through, $date, $expected]) {
@@ -450,40 +447,14 @@ final class BulkCalculationsTest extends TestCase
         }
     }
 
-    public function test_prefetched_negative_dates_and_metadata_are_retained_and_outside_dates_fall_back_lazily(): void
+    public function test_config_hint_does_not_limit_dates_and_new_batch_observes_definition_changes(): void
     {
-        $this->storage('database');
-        $holiday = $this->seedHoliday('warehouse', '2026-11-03', 'holiday');
-        $holiday->update(['title' => 'Named active closure']);
-        $this->seedHoliday('warehouse', '2026-11-07', 'working_day');
-        $this->seedHoliday('warehouse', '2026-11-02', 'holiday', false);
-        $this->seedHoliday('warehouse', '2026-12-02', 'holiday');
-        $provider = new DatabaseHolidayProvider;
-        $provider->prefetch(['warehouse'], '2026-11-01', '2026-11-30');
-        $connection = $this->app['db']->connection();
-        $connection->enableQueryLog();
-        $connection->flushQueryLog();
-
-        $this->assertFalse($provider->hasCustomHoliday('warehouse', CarbonImmutable::parse('2026-11-02', 'UTC')));
-        $this->assertFalse($provider->hasExtraWorkingDay('warehouse', CarbonImmutable::parse('2026-11-02', 'UTC')));
-        $this->assertSame('Named active closure', $provider->customHoliday('warehouse', CarbonImmutable::parse('2026-11-03', 'UTC'))->name);
-        $this->assertSame('database', $provider->customHoliday('warehouse', CarbonImmutable::parse('2026-11-03', 'UTC'))->source);
-        $this->assertTrue($provider->hasExtraWorkingDay('warehouse', CarbonImmutable::parse('2026-11-07', 'UTC')));
-        $this->assertCount(0, $this->holidayQueries($connection->getQueryLog()));
-        $this->assertTrue($provider->hasCustomHoliday('warehouse', CarbonImmutable::parse('2026-12-02', 'UTC')));
-        $this->assertTrue($provider->hasCustomHoliday('warehouse', CarbonImmutable::parse('2026-12-02', 'UTC')));
-        $this->assertCount(1, $this->holidayQueries($connection->getQueryLog()));
-    }
-
-    public function test_narrow_prefetch_falls_back_and_new_batch_observes_calendar_changes(): void
-    {
-        $this->storage('database');
-        $this->seedHoliday('warehouse', '2026-12-02', 'holiday');
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-12-02' => 'Closure']);
         $operations = [$this->dayItem('empty', '2026-11-02'), $this->dayItem('outside', '2026-12-02')];
         $options = ['prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-03']];
 
         $before = Workday::bulkCalculate($operations, $options);
-        $this->seedHoliday('warehouse', '2026-11-02', 'holiday');
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays.2026-11-02', 'New closure');
         $after = Workday::bulkCalculate($operations, $options);
 
         $this->assertTrue($before->items[0]->result);
@@ -492,31 +463,12 @@ final class BulkCalculationsTest extends TestCase
         $this->assertFalse($after->items[1]->result);
     }
 
-    public function test_unused_malformed_special_date_in_prefetched_interval_is_validated_only_when_accessed(): void
+    public function test_malformed_selected_profile_holidays_do_not_abort_unrelated_valid_items(): void
     {
-        $this->storage('database');
-        $this->app['db']->table('workday_special_dates')->insert(['profile' => 'warehouse', 'date' => '2026-11-20', 'type' => 'corrupt-type', 'title' => 'Unused bad row', 'is_active' => true]);
-        $options = ['prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30']];
-
-        $unused = Workday::bulkCalculate([$this->dayItem('valid', '2026-11-02')], $options);
-        $accessed = Workday::bulkCalculate([$this->dayItem('bad-row', '2026-11-20'), $this->dayItem('valid', '2026-11-02')], $options);
-
-        $this->assertSame(1, $unused->succeeded);
-        $this->assertFalse($accessed->items[0]->success);
-        $this->assertStringContainsString('corrupt-type', $accessed->items[0]->error['message']);
-        $this->assertTrue($accessed->items[1]->success);
-    }
-
-    public function test_malformed_recurring_rule_for_another_selected_profile_does_not_abort_unrelated_valid_items(): void
-    {
-        $this->storage('database');
-        config()->set('workdays.profiles.bad', $this->profile());
-        WorkdayHolidayRule::create(['profile' => 'bad', 'calendar_type' => 'unsupported', 'month' => 1, 'day' => 1, 'title' => 'Bad active rule', 'is_active' => true]);
-        WorkdayHolidayRule::create(['profile' => 'warehouse', 'calendar_type' => 'also-unsupported', 'month' => 1, 'day' => 1, 'title' => 'Inactive bad rule', 'is_active' => false]);
-
+        config()->set('workdays.definitions.profiles.bad', $this->profile());
+        config()->set('workdays.definitions.profiles.bad.holidays', ['unsupported' => ['01-01' => 'Invalid calendar']]);
         $result = Workday::bulkCalculate([$this->dayItem('valid'), $this->dayItem('bad-profile', profile: 'bad'), $this->dayItem('still-valid')],
             ['prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30']]);
-
         $this->assertTrue($result->items[0]->success);
         $this->assertFalse($result->items[1]->success);
         $this->assertStringContainsString('unsupported', $result->items[1]->error['message']);
@@ -537,9 +489,8 @@ final class BulkCalculationsTest extends TestCase
         $this->assertSame(1, config('workdays.max_scan_days'));
     }
 
-    public function test_global_horizon_snapshot_survives_configuration_changes_during_first_database_read(): void
+    public function test_global_horizon_survives_configuration_changes_after_the_view_opens(): void
     {
-        $this->storage('database');
         config()->set('workdays.max_scan_days', 1);
         $dayPlan = ['timezone' => 'UTC', 'profile_timezones' => ['carrier' => 'UTC'], 'stages' => [['id' => 'transit', 'type' => 'business_days', 'profile' => 'carrier', 'days' => 2]]];
         $operations = [
@@ -554,15 +505,15 @@ final class BulkCalculationsTest extends TestCase
             ['id' => 'reverse', 'operation' => 'reverse_plan_delivery', 'desired_completion_at' => '2026-11-04T16:00:00Z', 'plan' => $dayPlan, 'options' => ['lookback_days' => 2]],
         ];
         $changed = false;
-        $this->app['db']->listen(static function (QueryExecuted $query) use (&$changed): void {
-            if (! $changed && str_contains($query->sql, 'workday_')) {
+        $bulk = new BulkCalculator(app(CalculationContextFactory::class), static function () use (&$changed): void {
+            if (! $changed) {
                 $changed = true;
                 config()->set('workdays.max_scan_days', 31);
             }
         });
 
-        $oldSnapshot = Workday::bulkCalculate($operations);
-        $newSnapshot = Workday::bulkCalculate($operations);
+        $oldSnapshot = $bulk->calculate($operations);
+        $newSnapshot = $bulk->calculate($operations);
 
         $this->assertTrue($changed);
         $this->assertSame(1, $oldSnapshot->succeeded);
@@ -574,8 +525,7 @@ final class BulkCalculationsTest extends TestCase
 
     public function test_profile_include_start_and_hijri_settings_are_frozen_for_one_batch_and_refreshed_for_the_next(): void
     {
-        $this->storage('chain');
-        config()->set('workdays.profiles.calendar', ['weekends' => [], 'holidays' => ['hijri' => ['08-15' => 'Hijri closure']]]);
+        config()->set('workdays.definitions.profiles.calendar', ['weekends' => [], 'holidays' => ['hijri' => ['08-15' => 'Hijri closure']]]);
         $hijri = (new HijriCalendarAdapter('mathematical', 0))->hijriDateToGregorian(1446, 8, 15)->toDateString();
         $operations = [$this->dayItem('prime'),
             ['id' => 'windows', 'operation' => 'working_windows', 'profile' => 'warehouse', 'date' => '2026-11-02'],
@@ -584,18 +534,18 @@ final class BulkCalculationsTest extends TestCase
         ];
         $original = array_map(fn (array $item): mixed => $this->serialize($this->individual($item)), $operations);
         $changed = false;
-        $this->app['db']->listen(static function (QueryExecuted $query) use (&$changed): void {
-            if (! $changed && str_contains($query->sql, 'workday_')) {
+        $bulk = new BulkCalculator(app(CalculationContextFactory::class), static function () use (&$changed): void {
+            if (! $changed) {
                 $changed = true;
-                config()->set('workdays.include_start_date', true);
-                config()->set('workdays.hijri.adjustment', 1);
-                config()->set('workdays.profiles.warehouse.custom_holidays', ['2026-11-02' => 'New closure']);
-                config()->set('workdays.profiles.warehouse.working_hours.Monday', [['10:00', '11:00']]);
+                config()->set('workdays.definitions.include_start_date', true);
+                config()->set('workdays.definitions.hijri.adjustment', 1);
+                config()->set('workdays.definitions.profiles.warehouse.custom_holidays', ['2026-11-02' => 'New closure']);
+                config()->set('workdays.definitions.profiles.warehouse.working_hours.Monday', [['10:00', '11:00']]);
             }
         });
 
-        $before = Workday::bulkCalculate($operations);
-        $after = Workday::bulkCalculate($operations);
+        $before = $bulk->calculate($operations);
+        $after = $bulk->calculate($operations);
 
         $this->assertSame($original, array_map(fn (BulkCalculationItemResult $item): mixed => $this->serialize($item->result), $before->items));
         $this->assertFalse($after->items[0]->result);
@@ -604,19 +554,18 @@ final class BulkCalculationsTest extends TestCase
         $this->assertTrue($after->items[3]->result);
     }
 
-    public function test_datetime_inputs_are_detached_before_database_callbacks_can_change_them(): void
+    public function test_datetime_inputs_are_detached_before_construction_callbacks_can_change_them(): void
     {
-        $this->storage('database');
         $input = new DateTime('2026-11-02T10:00:12.123456Z');
         $changed = false;
-        $this->app['db']->listen(static function (QueryExecuted $query) use (&$changed, $input): void {
-            if (! $changed && str_contains($query->sql, 'workday_')) {
+        $bulk = new BulkCalculator(app(CalculationContextFactory::class), static function () use (&$changed, $input): void {
+            if (! $changed) {
                 $changed = true;
                 $input->modify('+1 month');
             }
         });
 
-        $result = Workday::bulkCalculate([$this->dayItem('prime'), [
+        $result = $bulk->calculate([$this->dayItem('prime'), [
             'id' => 'copied-input', 'operation' => 'add_business_minutes', 'profile' => 'warehouse', 'datetime' => $input, 'minutes' => 60,
         ]]);
 
@@ -628,7 +577,7 @@ final class BulkCalculationsTest extends TestCase
     public function test_operation_local_calculator_and_provider_construction_counts_do_not_grow_per_item(): void
     {
         $events = [];
-        $bulk = new BulkCalculator(static function (string $kind, ?string $identity, ?int $limit) use (&$events): void {
+        $bulk = new BulkCalculator(app(CalculationContextFactory::class), static function (string $kind, ?string $identity, ?int $limit) use (&$events): void {
             $events[] = [$kind, $identity, $limit];
         });
         $operations = array_map(fn (int $index): array => $this->dayItem('item-'.$index), range(0, 199));
@@ -686,11 +635,10 @@ final class BulkCalculationsTest extends TestCase
         $this->assertArrayNotHasKey('batch', $snapshot->toArray());
     }
 
-    public function test_inherited_profiles_keep_config_rules_cutoff_and_child_database_identity_without_routing(): void
+    public function test_inherited_profiles_share_holidays_hours_and_cutoff_under_child_identity_without_routing(): void
     {
-        $this->storage('chain');
-        $this->seedHoliday('warehouse', '2026-11-02', 'holiday');
-        config()->set('workdays.profile_routing', ['invalid' => true]);
+        config()->set('workdays.definitions.profiles.warehouse.custom_holidays.2026-11-02', 'Inherited closure');
+        config()->set('workdays.definitions.profile_routing', ['invalid' => true]);
         $operations = [$this->dayItem('parent', '2026-11-02'), $this->dayItem('child', '2026-11-02', 'child'), $this->dayItem('inherited-holiday', '2026-11-05', 'child'),
             ['id' => 'override', 'operation' => 'working_windows', 'profile' => 'child', 'date' => '2026-11-12'],
             ['id' => 'cutoff', 'operation' => 'resolve_cutoff', 'profile' => 'child', 'received_at' => '2026-11-02T13:00:00Z'],
@@ -699,7 +647,7 @@ final class BulkCalculationsTest extends TestCase
         $this->assertParity($operations, ['prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30']]);
         $actual = Workday::bulkCalculate($operations);
         $this->assertFalse($actual->items[0]->result);
-        $this->assertTrue($actual->items[1]->result);
+        $this->assertFalse($actual->items[1]->result);
         $this->assertFalse($actual->items[2]->result);
         $this->assertSame([['start' => '10:00', 'end' => '15:00']], $actual->items[3]->toArray()['result']);
         $this->assertSame('child', $actual->items[4]->result->profile);
@@ -709,7 +657,7 @@ final class BulkCalculationsTest extends TestCase
     {
         config()->set('workdays.max_scan_days', 1);
         $events = [];
-        $bulk = new BulkCalculator(static function (string $kind, ?string $identity, ?int $limit) use (&$events): void {
+        $bulk = new BulkCalculator(app(CalculationContextFactory::class), static function (string $kind, ?string $identity, ?int $limit) use (&$events): void {
             if ($kind === 'calculator') {
                 $events[] = [$identity, $limit];
             }
@@ -734,7 +682,7 @@ final class BulkCalculationsTest extends TestCase
     #[DataProvider('unexpectedConstructionErrors')]
     public function test_unknown_runtime_infrastructure_and_internal_errors_remain_visible(string $class): void
     {
-        $bulk = new BulkCalculator(static function () use ($class): never {
+        $bulk = new BulkCalculator(app(CalculationContextFactory::class), static function () use ($class): never {
             throw new $class('Unexpected internal construction failure.');
         });
         $this->expectException($class);
@@ -748,83 +696,14 @@ final class BulkCalculationsTest extends TestCase
         return [[RuntimeException::class], [\PDOException::class], [Error::class], [InvalidArgumentException::class]];
     }
 
-    public function test_numeric_string_profile_name_zero_is_preserved_with_database_prefetch(): void
+    public function test_numeric_string_profile_name_zero_is_preserved_with_config_hint(): void
     {
-        $this->storage('database');
-        config()->set('workdays.profiles', ['0' => $this->profile()]);
-        $this->seedHoliday('0', '2026-11-02', 'holiday');
+        config()->set('workdays.definitions.profiles', ['0' => $this->profile()]);
+        config()->set('workdays.definitions.profiles.0.custom_holidays', ['2026-11-02' => 'Zero closure']);
         $operation = $this->dayItem('zero', profile: '0');
 
         $this->assertParity([$operation], ['prefetch' => ['from' => '2026-11-02', 'through' => '2026-11-02']]);
         $this->assertFalse(Workday::bulkCalculate([$operation])->items[0]->result);
-    }
-
-    public function test_prefetch_membership_handles_profiles_beyond_the_first_twenty_five_bit_group(): void
-    {
-        $this->storage('database');
-        $profiles = [];
-        $operations = [];
-        foreach (range(0, 29) as $index) {
-            $name = 'profile'.$index;
-            $profiles[$name] = $this->profile();
-            $operations[] = $this->dayItem('item-'.$index, profile: $name);
-        }
-        config()->set('workdays.profiles', $profiles);
-        $this->seedHoliday('profile29', '2026-11-02', 'holiday');
-        WorkdayHolidayRule::create(['profile' => 'profile26', 'calendar_type' => 'gregorian', 'month' => 11, 'day' => 2, 'title' => 'Second membership group', 'is_active' => true]);
-
-        $this->assertParity($operations, ['prefetch' => ['from' => '2026-11-02', 'through' => '2026-11-02']]);
-        $result = Workday::bulkCalculate($operations, ['prefetch' => ['from' => '2026-11-02', 'through' => '2026-11-02']]);
-        $this->assertFalse($result->items[26]->result);
-        $this->assertFalse($result->items[29]->result);
-        $this->assertTrue($result->items[28]->result);
-    }
-
-    public function test_sqlite_case_insensitive_profile_equality_maps_prefetched_rows_to_both_configured_aliases(): void
-    {
-        $this->storage('database');
-        $connection = $this->app['db']->connection();
-        $this->assertSame(':memory:', $connection->getConfig('database'));
-        $connection->statement('DROP TABLE workday_holiday_rules');
-        $connection->statement('DROP TABLE workday_special_dates');
-        $connection->statement('CREATE TABLE workday_holiday_rules (id INTEGER PRIMARY KEY AUTOINCREMENT, profile TEXT COLLATE NOCASE NOT NULL, calendar_type TEXT NOT NULL, month INTEGER NOT NULL, day INTEGER NOT NULL, title TEXT, is_active INTEGER NOT NULL DEFAULT 1, meta TEXT, created_at TEXT, updated_at TEXT)');
-        $connection->statement('CREATE TABLE workday_special_dates (id INTEGER PRIMARY KEY AUTOINCREMENT, profile TEXT COLLATE NOCASE NOT NULL, date DATE NOT NULL, type TEXT NOT NULL, title TEXT, is_active INTEGER NOT NULL DEFAULT 1, meta TEXT, created_at TEXT, updated_at TEXT)');
-        config()->set('workdays.profiles', ['WAREHOUSE' => $this->profile(), 'warehouse' => $this->profile()]);
-        $this->seedHoliday('warehouse', '2026-11-02', 'holiday');
-        WorkdayHolidayRule::create(['profile' => 'warehouse', 'calendar_type' => 'gregorian', 'month' => 11, 'day' => 3, 'title' => 'Case-insensitive rule', 'is_active' => true]);
-        $operations = [$this->dayItem('upper-holiday', profile: 'WAREHOUSE'), $this->dayItem('lower-holiday'),
-            $this->dayItem('upper-rule', '2026-11-03', 'WAREHOUSE'), $this->dayItem('lower-rule', '2026-11-03')];
-
-        $this->assertParity($operations, ['prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-03']]);
-        $actual = Workday::bulkCalculate($operations, ['prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-03']]);
-        $this->assertSame([false, false, false, false], array_map(static fn (BulkCalculationItemResult $item): bool => $item->result, $actual->items));
-    }
-
-    public function test_duplicate_raw_timestamp_rows_keep_existing_first_match_in_prefetch_and_lazy_fallback(): void
-    {
-        $this->storage('database');
-        $first = $this->seedHoliday('warehouse', '2026-11-02', 'holiday');
-        $first->update(['title' => 'First matching row']);
-        $this->app['db']->table('workday_special_dates')->insert(['profile' => 'warehouse', 'date' => '2026-11-02 12:00:00', 'type' => 'holiday', 'title' => 'Later matching row', 'is_active' => true]);
-        $this->app['db']->table('workday_special_dates')->insert(['profile' => 'warehouse', 'date' => '2026-11-02', 'type' => 'holiday', 'title' => 'Date-only matching row', 'is_active' => true]);
-        $date = CarbonImmutable::parse('2026-11-02', 'UTC');
-        $lazy = new DatabaseHolidayProvider;
-        $covered = new DatabaseHolidayProvider;
-        $covered->prefetch(['warehouse'], '2026-11-02', '2026-11-02');
-        $outside = new DatabaseHolidayProvider;
-        $outside->prefetch(['warehouse'], '2026-11-01', '2026-11-01');
-        $expected = $lazy->customHoliday('warehouse', $date);
-        $connection = $this->app['db']->connection();
-        $connection->enableQueryLog();
-        $connection->flushQueryLog();
-
-        $this->assertContains($expected->name, ['First matching row', 'Later matching row', 'Date-only matching row']);
-        $this->assertSame($expected->name, $covered->customHoliday('warehouse', $date)->name);
-        $this->assertSame($expected->name, $covered->customHoliday('warehouse', $date)->name);
-        $this->assertCount(1, $this->holidayQueries($connection->getQueryLog()));
-        $this->assertSame($expected->name, $outside->customHoliday('warehouse', $date)->name);
-        $this->assertSame('database', $outside->customHoliday('warehouse', $date)->source);
-        $this->assertCount(2, $this->holidayQueries($connection->getQueryLog()));
     }
 
     public function test_collected_error_messages_are_bounded_valid_utf8_without_traces(): void
@@ -843,7 +722,7 @@ final class BulkCalculationsTest extends TestCase
 
     public function test_application_invalid_argument_wrapped_by_an_advanced_engine_still_escapes_collect_mode(): void
     {
-        $bulk = new BulkCalculator(static function (string $kind): void {
+        $bulk = new BulkCalculator(app(CalculationContextFactory::class), static function (string $kind): void {
             if ($kind === 'calculator') {
                 throw new InvalidArgumentException('Application callback infrastructure failed.');
             }
@@ -890,25 +769,7 @@ final class BulkCalculationsTest extends TestCase
         }
         $expected = $this->individualFailure($item);
 
-        $collected = Workday::bulkCalculate([$item], ['on_error' => 'collect']);
-
-        $this->assertSame(0, $collected->succeeded);
-        $this->assertSame(1, $collected->failed);
-        $this->assertFalse($collected->items[0]->success);
-        $this->assertNull($collected->items[0]->result);
-        $this->assertSame($expected::class, $collected->items[0]->error['type']);
-        $this->assertSame($expected->getMessage(), $collected->items[0]->error['message']);
-        $thrown = null;
-        try {
-            Workday::bulkCalculate([$item], ['on_error' => 'throw']);
-        } catch (RuntimeException $exception) {
-            $thrown = $exception;
-        }
-        $this->assertNotNull($thrown);
-        $this->assertStringContainsString($item['id'], $thrown->getMessage());
-        $this->assertStringContainsString($operation, $thrown->getMessage());
-        $this->assertSame($expected::class, $thrown->getPrevious()::class);
-        $this->assertSame($expected->getMessage(), $thrown->getPrevious()->getMessage());
+        $this->assertGlobalFailure($item, $expected);
     }
 
     public static function advancedInvalidHorizonCases(): array
@@ -931,19 +792,15 @@ final class BulkCalculationsTest extends TestCase
         config()->set('workdays.max_scan_days', 0);
         $profile = $kind === 'unknown profile' ? 'missing' : 'warehouse';
         if ($kind !== 'unknown profile') {
-            config()->set('workdays.include_start_date', []);
+            config()->set('workdays.definitions.include_start_date', []);
         }
         if ($kind === 'invalid profile before include') {
-            config()->set('workdays.profiles.warehouse.weekends', 'invalid');
+            config()->set('workdays.definitions.profiles.warehouse.weekends', 'invalid');
         }
         $item = $this->dayItem('combined-errors', profile: $profile);
         $expected = $this->individualFailure($item);
 
-        $actual = Workday::bulkCalculate([$item]);
-
-        $this->assertFalse($actual->items[0]->success);
-        $this->assertSame($expected::class, $actual->items[0]->error['type']);
-        $this->assertSame($expected->getMessage(), $actual->items[0]->error['message']);
+        $this->assertGlobalFailure($item, $expected);
     }
 
     public static function combinedBasicConfigurationFailures(): array
@@ -954,7 +811,7 @@ final class BulkCalculationsTest extends TestCase
     #[DataProvider('allOperationNames')]
     public function test_explicit_null_profile_configuration_preserves_each_individual_error_and_throw_cause(string $operation, bool $malformedReverse = false): void
     {
-        config()->set('workdays.profiles', null);
+        config()->set('workdays.definitions.profiles', null);
         $item = array_values(array_filter($this->allOperations(), static fn (array $candidate): bool => $candidate['operation'] === $operation))[0];
         $item['id'] = 'null-profiles-'.$operation;
         if ($malformedReverse) {
@@ -964,25 +821,7 @@ final class BulkCalculationsTest extends TestCase
         }
         $expected = $this->individualFailure($item);
 
-        $collected = Workday::bulkCalculate([$item]);
-
-        $this->assertSame(0, $collected->succeeded);
-        $this->assertSame(1, $collected->failed);
-        $this->assertFalse($collected->items[0]->success);
-        $this->assertNull($collected->items[0]->result);
-        $this->assertSame($expected::class, $collected->items[0]->error['type']);
-        $this->assertSame($expected->getMessage(), $collected->items[0]->error['message']);
-        $thrown = null;
-        try {
-            Workday::bulkCalculate([$item], ['on_error' => 'throw']);
-        } catch (RuntimeException $exception) {
-            $thrown = $exception;
-        }
-        $this->assertNotNull($thrown);
-        $this->assertStringContainsString($item['id'], $thrown->getMessage());
-        $this->assertStringContainsString($operation, $thrown->getMessage());
-        $this->assertSame($expected::class, $thrown->getPrevious()::class);
-        $this->assertSame($expected->getMessage(), $thrown->getPrevious()->getMessage());
+        $this->assertGlobalFailure($item, $expected);
     }
 
     public static function allOperationNames(): array
@@ -1059,9 +898,9 @@ final class BulkCalculationsTest extends TestCase
 
     public function test_installed_package_collects_a_real_hijri_range_failure_and_preserves_the_next_item(): void
     {
-        config()->set('workdays.hijri.method', 'umm_al_qura');
-        config()->set('workdays.profiles.warehouse.weekends', []);
-        config()->set('workdays.profiles.warehouse.holidays.hijri', ['01-01' => 'Hijri holiday']);
+        config()->set('workdays.definitions.hijri.method', 'umm_al_qura');
+        config()->set('workdays.definitions.profiles.warehouse.weekends', []);
+        config()->set('workdays.definitions.profiles.warehouse.holidays.hijri', ['01-01' => 'Hijri holiday']);
         $item = $this->dayItem('out-of-calendar-range', '2200-01-01');
         $expected = $this->individualFailure($item);
         $this->assertInstanceOf(InvalidArgumentException::class, $expected);
@@ -1086,7 +925,7 @@ final class BulkCalculationsTest extends TestCase
             $failure = $exception;
         }
         $this->assertInstanceOf(InvalidUnitException::class, $failure);
-        $calculator = new BulkCalculator(static function () use ($failure): never {
+        $calculator = new BulkCalculator(app(CalculationContextFactory::class), static function () use ($failure): never {
             throw $failure;
         });
 
@@ -1098,23 +937,24 @@ final class BulkCalculationsTest extends TestCase
     }
 
     #[DataProvider('applicationFailureModes')]
-    public function test_real_application_query_listener_failures_escape_each_error_mode(string $class, string $mode): void
+    public function test_real_application_source_read_failures_escape_each_error_mode(string $class, string $mode): void
     {
-        $this->storage('database');
-        $failure = new $class('Application database query listener failed.');
-        $armed = true;
-        $this->app['db']->listen(static function (QueryExecuted $query) use ($failure, &$armed): void {
-            if ($armed && str_starts_with(strtolower(ltrim($query->sql)), 'select')) {
-                $armed = false;
-                throw $failure;
-            }
-        });
+        $failure = new $class('Application source callback failed.');
+        $source = new class($failure) implements DefinitionSource
+        {
+            public function __construct(private Throwable $failure) {}
 
+            public function open(): WorkdayDefinitions
+            {
+                throw $this->failure;
+            }
+        };
+        $bulk = new BulkCalculator(new CalculationContextFactory(config(), $source));
         try {
-            Workday::bulkCalculate([$this->dayItem('query-listener-error'), $this->dayItem('after-error')], ['on_error' => $mode]);
-            $this->fail('The application query listener exception must remain visible.');
-        } catch (Throwable $actual) {
-            $this->assertSame($failure, $actual);
+            $bulk->calculate([$this->dayItem('source-error'), $this->dayItem('after-error')], ['on_error' => $mode]);
+            $this->fail('The source failure must remain visible.');
+        } catch (DefinitionSourceException $actual) {
+            $this->assertSame($failure, $actual->getPrevious());
         }
     }
 
@@ -1123,7 +963,7 @@ final class BulkCalculationsTest extends TestCase
     {
         $cause = $this->individualFailure($this->dayItem('invalid-date', 'not-a-valid-datetime'));
         $failure = new $class('Application callback failed after parsing.', previous: $cause);
-        $calculator = new BulkCalculator(static function () use ($failure): never {
+        $calculator = new BulkCalculator(app(CalculationContextFactory::class), static function () use ($failure): never {
             throw $failure;
         });
 
@@ -1232,7 +1072,8 @@ $exceptionFiles = [];
 $result = null;
 try {
     $observer = $input['infrastructure_cause'] === null ? null : require $source.DIRECTORY_SEPARATOR.'Bulk'.DIRECTORY_SEPARATOR.'InfrastructureFixture.php';
-    $result = (new Zarbinco\LaravelWorkdays\Bulk\BulkCalculator($observer))->calculate($input['operations'], $input['options'])->toArray();
+    $factory = new Zarbinco\LaravelWorkdays\Configuration\CalculationContextFactory($container['config'], new Zarbinco\LaravelWorkdays\Configuration\ConfigDefinitionSource($container['config']));
+    $result = (new Zarbinco\LaravelWorkdays\Bulk\BulkCalculator($factory, $observer))->calculate($input['operations'], $input['options'])->toArray();
 } catch (Throwable $error) {
     $chain = [];
     for ($cause = $error; $cause !== null; $cause = $cause->getPrevious()) {
@@ -1370,20 +1211,25 @@ PHP);
 
     private function storage(string $driver): void
     {
-        if ($driver !== 'config') {
-            $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        }
-        config()->set('workdays.storage.driver', $driver);
+        config()->set('workdays.driver', $driver);
     }
 
-    private function seedHoliday(string $profile, string $date, string $type, bool $active = true): WorkdaySpecialDate
+    private function assertGlobalFailure(array $item, Throwable $expected): void
     {
-        return WorkdaySpecialDate::create(['profile' => $profile, 'date' => $date, 'type' => $type, 'title' => 'Fixture '.$type, 'is_active' => $active]);
+        $this->assertInstanceOf(DefinitionSourceException::class, $expected);
+        foreach (['collect', 'throw'] as $mode) {
+            try {
+                Workday::bulkCalculate([$item], ['on_error' => $mode]);
+                $this->fail('A global source error must escape the whole Batch.');
+            } catch (DefinitionSourceException $actual) {
+                $this->assertSame($expected->getMessage(), $actual->getMessage());
+            }
+        }
     }
 
     private function holidayQueries(array $queries): array
     {
         return array_values(array_filter($queries, static fn (array $query): bool => str_starts_with(strtolower(ltrim($query['query'])), 'select')
-            && (str_contains($query['query'], 'workday_holiday_rules') || str_contains($query['query'], 'workday_special_dates'))));
+            && (str_contains($query['query'], 'workday_definition_'))));
     }
 }

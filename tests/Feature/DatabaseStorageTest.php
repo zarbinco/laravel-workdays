@@ -4,12 +4,12 @@ declare(strict_types=1);
 
 namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 
-use Carbon\CarbonImmutable;
 use Illuminate\Support\Facades\Schema;
+use InvalidArgumentException;
 use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Configuration\DatabaseDefinitionRepository;
+use Zarbinco\LaravelWorkdays\Exceptions\DefinitionSourceException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Models\WorkdayHolidayRule;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
 final class DatabaseStorageTest extends TestCase
@@ -17,334 +17,252 @@ final class DatabaseStorageTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
-
         $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
+        config()->set('workdays.definitions.default_profile', 'global');
+        config()->set('workdays.definitions.profiles', ['global' => $this->profile()]);
     }
 
-    public function test_migrations_create_workday_holiday_rules_table(): void
+    public function test_migration_creates_only_revision_schema_and_empty_singleton_state(): void
     {
-        $this->assertTrue(Schema::hasTable('workday_holiday_rules'));
-        $this->assertTrue(Schema::hasColumns('workday_holiday_rules', [
-            'id',
-            'profile',
-            'calendar_type',
-            'month',
-            'day',
-            'title',
-            'is_active',
-            'meta',
-            'created_at',
-            'updated_at',
-        ]));
+        $this->assertTrue(Schema::hasColumns('workday_definition_state', ['id', 'active_revision_id']));
+        $this->assertTrue(Schema::hasColumns('workday_definition_revisions', ['id', 'settings_json', 'settings_hash', 'schema_version', 'content_hash', 'profile_count', 'metadata_json', 'created_at']));
+        $this->assertTrue(Schema::hasColumns('workday_definition_profiles', ['revision_id', 'name_hash', 'profile_name', 'position', 'definition_json', 'content_hash']));
+        $this->assertFalse(Schema::hasTable('workday_special_dates'));
+        $this->assertFalse(Schema::hasTable('workday_holiday_rules'));
+        $this->assertNull(app(DatabaseDefinitionRepository::class)->current());
+        $this->assertSame(1, $this->app['db']->table('workday_definition_state')->count());
+        $this->assertSame(0, $this->app['db']->table('workday_definition_revisions')->count());
     }
 
-    public function test_migrations_create_workday_special_dates_table(): void
+    public function test_migration_down_and_up_are_explicit_and_disposable(): void
     {
-        $this->assertTrue(Schema::hasTable('workday_special_dates'));
-        $this->assertTrue(Schema::hasColumns('workday_special_dates', [
-            'id',
-            'profile',
-            'date',
-            'type',
-            'title',
-            'is_active',
-            'meta',
-            'created_at',
-            'updated_at',
-        ]));
+        $this->assertSame(':memory:', $this->app['db']->connection()->getConfig('database'));
+        $migration = require dirname(__DIR__, 2).'/database/migrations/2026_10_20_000001_create_workday_definitions_tables.php';
+        $migration->down();
+        $this->assertFalse(Schema::hasTable('workday_definition_state'));
+        $this->assertFalse(Schema::hasTable('workday_definition_profiles'));
+        $this->assertFalse(Schema::hasTable('workday_definition_revisions'));
+        $migration->up();
+        $this->assertNull(app(DatabaseDefinitionRepository::class)->current());
     }
 
-    public function test_models_cast_meta_and_date_correctly(): void
+    public function test_raw_arrays_and_metadata_replace_unrestricted_eloquent_model_writes(): void
     {
-        $rule = WorkdayHolidayRule::create([
-            'profile' => 'global',
-            'calendar_type' => 'gregorian',
-            'month' => 6,
-            'day' => 29,
-            'title' => 'Rule holiday',
-            'is_active' => 1,
-            'meta' => ['source' => 'test'],
-        ])->refresh();
-
-        $specialDate = WorkdaySpecialDate::create([
-            'profile' => 'global',
-            'date' => '2026-06-29',
-            'type' => 'holiday',
-            'title' => 'Special holiday',
-            'is_active' => 1,
-            'meta' => ['source' => 'test'],
-        ])->refresh();
-
-        $this->assertTrue($rule->is_active);
-        $this->assertSame(['source' => 'test'], $rule->meta);
-        $this->assertTrue($specialDate->is_active);
-        $this->assertInstanceOf(CarbonImmutable::class, $specialDate->date);
-        $this->assertSame(['source' => 'test'], $specialDate->meta);
+        $repository = app(DatabaseDefinitionRepository::class);
+        $definitions = config('workdays.definitions');
+        $published = $repository->publish($definitions, null, ['actor' => 'fixture-editor', 'reason' => 'Initial fixture']);
+        $current = $repository->current();
+        $this->assertSame($published->revisionId, $current->revisionId);
+        $this->assertSame($definitions, $current->definitions);
+        $this->assertSame(['actor' => 'fixture-editor', 'reason' => 'Initial fixture'], $current->metadata);
+        $this->assertFalse(class_exists('Zarbinco\\LaravelWorkdays\\Models\\WorkdayHolidayRule'));
+        $this->assertFalse(class_exists('Zarbinco\\LaravelWorkdays\\Models\\WorkdaySpecialDate'));
     }
 
     public function test_config_storage_remains_default(): void
     {
-        $this->assertSame('config', config('workdays.storage.driver'));
+        $this->assertSame('config', config('workdays.driver'));
     }
 
-    public function test_database_storage_detects_gregorian_recurring_holiday_from_database(): void
+    public function test_database_source_detects_gregorian_recurring_holiday(): void
     {
-        $this->setStorageDriver('database');
-        $this->createRule('global', 'gregorian', 6, 29);
-
-        $calculator = Workday::profile('global');
-
-        $this->assertTrue($calculator->isGregorianHoliday('2026-06-29'));
-        $this->assertTrue($calculator->isCalendarHoliday('2026-06-29'));
+        $profile = $this->profile();
+        $profile['holidays']['gregorian']['06-29'] = 'Recurring holiday';
+        $this->publish(['global' => $profile]);
+        $this->assertTrue(Workday::profile('global')->isGregorianHoliday('2026-06-29'));
+        $this->assertTrue(Workday::profile('global')->isCalendarHoliday('2026-06-29'));
     }
 
-    public function test_database_storage_detects_jalali_recurring_holiday_from_database(): void
+    public function test_database_source_detects_jalali_recurring_holiday(): void
     {
-        $this->setStorageDriver('database');
-        $this->createRule('global', 'jalali', 4, 1);
-
-        $calculator = Workday::profile('global');
-
-        $this->assertTrue($calculator->isJalaliHoliday('2026-06-22'));
-        $this->assertTrue($calculator->isCalendarHoliday('2026-06-22'));
+        $profile = $this->profile();
+        $profile['holidays']['jalali']['04-01'] = 'Jalali holiday';
+        $this->publish(['global' => $profile]);
+        $this->assertTrue(Workday::profile('global')->isJalaliHoliday('2026-06-22'));
+        $this->assertTrue(Workday::profile('global')->isCalendarHoliday('2026-06-22'));
     }
 
-    public function test_database_storage_detects_hijri_recurring_holiday_from_database(): void
+    public function test_database_source_detects_hijri_recurring_holiday(): void
     {
-        $this->setStorageDriver('database');
-        $date = (new HijriCalendarAdapter)->hijriDateToGregorian(1446, 8, 15);
-        $this->createRule('global', 'hijri', 8, 15);
-
-        $calculator = Workday::profile('global');
-
-        $this->assertTrue($calculator->isHijriHoliday($date));
-        $this->assertTrue($calculator->isCalendarHoliday($date));
+        $profile = $this->profile();
+        $profile['holidays']['hijri']['08-15'] = 'Hijri holiday';
+        $this->publish(['global' => $profile]);
+        $date = (new HijriCalendarAdapter('umm_al_qura', 0))->hijriDateToGregorian(1446, 8, 15);
+        $this->assertTrue(Workday::profile('global')->isHijriHoliday($date));
+        $this->assertTrue(Workday::profile('global')->isCalendarHoliday($date));
     }
 
-    public function test_database_storage_detects_exact_custom_holiday_from_database(): void
+    public function test_database_source_detects_exact_custom_holiday(): void
     {
-        $this->setStorageDriver('database');
-        $this->createSpecialDate('global', '2026-06-29', 'holiday');
-
+        $profile = $this->profile();
+        $profile['custom_holidays']['2026-06-29'] = 'Company holiday';
+        $this->publish(['global' => $profile]);
         $calculator = Workday::profile('global');
-
         $this->assertTrue($calculator->isCustomHoliday('2026-06-29'));
         $this->assertTrue($calculator->isHoliday('2026-06-29'));
         $this->assertFalse($calculator->isBusinessDay('2026-06-29'));
     }
 
-    public function test_database_storage_detects_exact_extra_working_day_from_database(): void
+    public function test_database_source_detects_extra_working_day_and_overrides_weekend_and_holiday(): void
     {
-        $this->setStorageDriver('database');
-        $this->createSpecialDate('global', '2026-06-29', 'working_day');
-
+        $profile = $this->profile();
+        $profile['custom_holidays']['2026-07-04'] = 'Saturday holiday';
+        $profile['extra_working_days']['2026-07-04'] = 'Extra Saturday';
+        $this->publish(['global' => $profile]);
         $calculator = Workday::profile('global');
-
-        $this->assertTrue($calculator->isExtraWorkingDay('2026-06-29'));
-        $this->assertTrue($calculator->isBusinessDay('2026-06-29'));
-        $this->assertFalse($calculator->isHoliday('2026-06-29'));
+        $this->assertTrue($calculator->isExtraWorkingDay('2026-07-04'));
+        $this->assertTrue($calculator->isWeekend('2026-07-04'));
+        $this->assertTrue($calculator->isCustomHoliday('2026-07-04'));
+        $this->assertTrue($calculator->isBusinessDay('2026-07-04'));
+        $reasons = $calculator->explain('2026-07-04')->toArray()['reasons'];
+        foreach (['weekend', 'custom_holiday'] as $type) {
+            $reason = $this->reason($reasons, $type);
+            $this->assertTrue($reason['overridden']);
+            $this->assertSame('extra_working_day', $reason['overridden_by']);
+        }
+        $this->assertSame('database', $this->reason($reasons, 'extra_working_day')['source']);
     }
 
-    public function test_database_extra_working_day_overrides_weekend(): void
+    public function test_database_does_not_validate_or_use_malformed_config_operational_data(): void
     {
-        $this->setStorageDriver('database');
-        $this->createSpecialDate('global', '2026-06-27', 'working_day');
-
-        $calculator = Workday::profile('global');
-
-        $this->assertTrue($calculator->isWeekend('2026-06-27'));
-        $this->assertTrue($calculator->isBusinessDay('2026-06-27'));
-        $this->assertFalse($calculator->isHoliday('2026-06-27'));
+        $this->publish(['database-only' => $this->profile()], 'database-only');
+        config()->set('workdays.definitions', ['profiles' => new \stdClass, 'hijri' => false]);
+        $this->assertTrue(Workday::profile('database-only')->isBusinessDay('2026-06-29'));
+        $this->expectException(InvalidArgumentException::class);
+        Workday::profile('config-only');
     }
 
-    public function test_database_extra_working_day_overrides_database_holiday(): void
+    public function test_config_does_not_use_database_reopening_or_holiday_reasons(): void
     {
-        $this->setStorageDriver('database');
-        $this->createSpecialDate('global', '2026-06-29', 'holiday');
-        $this->createSpecialDate('global', '2026-06-29', 'working_day');
-
-        $calculator = Workday::profile('global');
-
-        $this->assertTrue($calculator->isCustomHoliday('2026-06-29'));
-        $this->assertTrue($calculator->isExtraWorkingDay('2026-06-29'));
-        $this->assertTrue($calculator->isBusinessDay('2026-06-29'));
-        $this->assertFalse($calculator->isHoliday('2026-06-29'));
+        $profile = $this->profile();
+        $profile['extra_working_days']['2026-06-29'] = 'Database reopening';
+        $this->publish(['global' => $profile]);
+        config()->set('workdays.driver', 'config');
+        config()->set('workdays.definitions.profiles.global.custom_holidays', ['2026-06-29' => 'Config holiday']);
+        $info = Workday::profile('global')->explain('2026-06-29')->toArray();
+        $this->assertFalse($info['is_business_day']);
+        $this->assertSame('Config holiday', $this->reason($info['reasons'], 'custom_holiday')['title']);
+        $this->assertSame('config', $this->reason($info['reasons'], 'custom_holiday')['source']);
+        $this->assertSame([], array_values(array_filter($info['reasons'], static fn (array $reason): bool => $reason['type'] === 'extra_working_day')));
     }
 
-    public function test_chain_storage_detects_config_holiday(): void
+    public function test_database_explanation_preserves_custom_holiday_title_source_and_key(): void
     {
-        $this->setStorageDriver('chain');
-
-        $this->assertTrue(Workday::profile('global')->isGregorianHoliday('2026-12-25'));
-    }
-
-    public function test_chain_storage_detects_database_holiday(): void
-    {
-        $this->setStorageDriver('chain');
-        $this->createRule('global', 'gregorian', 6, 29);
-
-        $this->assertTrue(Workday::profile('global')->isGregorianHoliday('2026-06-29'));
-    }
-
-    public function test_chain_storage_database_working_day_overrides_config_holiday(): void
-    {
-        $this->setStorageDriver('chain');
-        $this->createSpecialDate('global', '2026-12-25', 'working_day');
-
-        $calculator = Workday::profile('global');
-
-        $this->assertTrue($calculator->isGregorianHoliday('2026-12-25'));
-        $this->assertTrue($calculator->isBusinessDay('2026-12-25'));
-        $this->assertFalse($calculator->isHoliday('2026-12-25'));
-    }
-
-    public function test_chain_storage_config_extra_working_day_overrides_database_holiday(): void
-    {
-        $this->setStorageDriver('chain');
-        $this->setProfileConfig('global', [
-            'extra_working_days' => [
-                '2026-06-29' => 'Compensation working day',
-            ],
-        ]);
-        $this->createSpecialDate('global', '2026-06-29', 'holiday');
-
-        $calculator = Workday::profile('global');
-
-        $this->assertTrue($calculator->isCustomHoliday('2026-06-29'));
-        $this->assertTrue($calculator->isExtraWorkingDay('2026-06-29'));
-        $this->assertTrue($calculator->isBusinessDay('2026-06-29'));
-        $this->assertFalse($calculator->isHoliday('2026-06-29'));
-    }
-
-    public function test_config_storage_ignores_database_holidays(): void
-    {
-        $this->setStorageDriver('config');
-        $this->createRule('global', 'gregorian', 6, 29);
-        $this->createSpecialDate('global', '2026-06-29', 'holiday');
-
-        $calculator = Workday::profile('global');
-
-        $this->assertFalse($calculator->isGregorianHoliday('2026-06-29'));
-        $this->assertFalse($calculator->isCustomHoliday('2026-06-29'));
-    }
-
-    public function test_database_storage_ignores_config_holidays_except_weekends_profile_and_hijri_config(): void
-    {
-        $this->setStorageDriver('database');
-
-        $calculator = Workday::profile('global');
-
-        $this->assertFalse($calculator->isGregorianHoliday('2026-12-25'));
-        $this->assertFalse($calculator->isCalendarHoliday('2026-12-25'));
-        $this->assertTrue($calculator->isWeekend('2026-06-27'));
-    }
-
-    public function test_explain_returns_database_custom_holiday_reason(): void
-    {
-        $this->setStorageDriver('database');
-        $this->createSpecialDate('global', '2026-06-29', 'holiday', 'Database company holiday');
-
-        $info = Workday::profile('global')->explain('2026-06-29');
-        $reason = $info->toArray()['reasons'][0];
-
-        $this->assertFalse($info->isBusinessDay);
-        $this->assertTrue($info->isCustomHoliday);
-        $this->assertSame('custom_holiday', $reason['type']);
+        $profile = $this->profile();
+        $profile['custom_holidays']['2026-06-29'] = 'Database company holiday';
+        $this->publish(['global' => $profile]);
+        $reason = $this->reason(Workday::profile('global')->explain('2026-06-29')->toArray()['reasons'], 'custom_holiday');
         $this->assertSame('Database company holiday', $reason['title']);
         $this->assertSame('database', $reason['source']);
         $this->assertSame('2026-06-29', $reason['key']);
     }
 
-    public function test_explain_returns_database_extra_working_day_reason(): void
+    public function test_materialized_profile_keeps_negative_and_outside_hint_dates_without_hot_path_sql(): void
     {
-        $this->setStorageDriver('database');
-        $this->createSpecialDate('global', '2026-06-27', 'working_day', 'Database working day');
-
-        $info = Workday::profile('global')->explain('2026-06-27');
-        $reasons = $info->toArray()['reasons'];
-        $extraWorkingDayReason = $this->reason($reasons, 'extra_working_day');
-        $weekendReason = $this->reason($reasons, 'weekend');
-
-        $this->assertTrue($info->isBusinessDay);
-        $this->assertFalse($info->isNonWorkingDay);
-        $this->assertTrue($info->isWeekend);
-        $this->assertTrue($info->isExtraWorkingDay);
-        $this->assertSame('Database working day', $extraWorkingDayReason['title']);
-        $this->assertSame('database', $extraWorkingDayReason['source']);
-        $this->assertTrue($weekendReason['overridden']);
-        $this->assertSame('extra_working_day', $weekendReason['overridden_by']);
+        $profile = $this->profile();
+        $profile['custom_holidays'] = ['2026-11-03' => 'Named closure', '2026-12-02' => 'Outside closure'];
+        $profile['extra_working_days'] = ['2026-11-07' => 'Reopening'];
+        $this->publish(['global' => $profile]);
+        $calculator = Workday::profile('global');
+        $connection = $this->app['db']->connection();
+        $connection->enableQueryLog();
+        $connection->flushQueryLog();
+        foreach (['2026-11-02' => true, '2026-11-03' => false, '2026-11-07' => true, '2026-12-02' => false] as $date => $expected) {
+            $this->assertSame($expected, $calculator->isBusinessDay($date));
+        }
+        $this->assertSame('Named closure', $this->reason($calculator->explain('2026-11-03')->toArray()['reasons'], 'custom_holiday')['title']);
+        $this->assertSame([], $connection->getQueryLog());
+        $operations = array_map(static fn (string $date): array => ['id' => $date, 'operation' => 'is_business_day', 'profile' => 'global', 'date' => $date], ['2026-11-02', '2026-11-03', '2026-12-02']);
+        $plain = Workday::bulkCalculate($operations)->toArray();
+        $hint = Workday::bulkCalculate($operations, ['prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30']])->toArray();
+        $this->assertSame($plain, $hint);
     }
 
-    public function test_explain_with_chain_storage_prefers_database_detail_when_both_exist(): void
+    public function test_corrupt_persisted_profile_escapes_bulk_collect_and_prefetch(): void
     {
-        $this->setStorageDriver('chain');
-        $this->setProfileConfig('global', [
-            'custom_holidays' => [
-                '2026-06-29' => 'Config holiday',
-            ],
-        ]);
-        $this->createSpecialDate('global', '2026-06-29', 'holiday', 'Database holiday');
-
-        $info = Workday::profile('global')->explain('2026-06-29');
-        $reason = $this->reason($info->toArray()['reasons'], 'custom_holiday');
-
-        $this->assertFalse($info->isBusinessDay);
-        $this->assertTrue($info->isCustomHoliday);
-        $this->assertSame('Database holiday', $reason['title']);
-        $this->assertSame('database', $reason['source']);
+        $this->publish(['global' => $this->profile()]);
+        $this->app['db']->table('workday_definition_profiles')->where('profile_name', 'global')->update(['definition_json' => '{broken']);
+        $this->expectException(DefinitionSourceException::class);
+        Workday::bulkCalculate([['id' => 'corrupt', 'operation' => 'is_business_day', 'profile' => 'global', 'date' => '2026-11-02']], ['on_error' => 'collect', 'prefetch' => ['from' => '2026-11-01', 'through' => '2026-11-30']]);
     }
 
-    private function setStorageDriver(string $driver): void
+    public function test_thirty_profiles_keep_exact_holiday_membership_without_old_bit_groups(): void
     {
-        config()->set('workdays.storage.driver', $driver);
+        $profiles = [];
+        $operations = [];
+        foreach (range(0, 29) as $index) {
+            $profiles['profile'.$index] = $this->profile();
+            $operations[] = ['id' => 'item'.$index, 'operation' => 'is_business_day', 'profile' => 'profile'.$index, 'date' => '2026-11-02'];
+        }
+        $profiles['profile29']['custom_holidays']['2026-11-02'] = 'Exact closure';
+        $profiles['profile26']['holidays']['gregorian']['11-02'] = 'Recurring closure';
+        $this->publish($profiles, 'profile0');
+        foreach ([[], ['prefetch' => ['from' => '2026-11-02', 'through' => '2026-11-02']]] as $options) {
+            $result = Workday::bulkCalculate($operations, $options);
+            $this->assertSame(30, $result->succeeded);
+            foreach ($result->items as $index => $item) {
+                $this->assertSame(! in_array($index, [26, 29], true), $item->result);
+            }
+        }
     }
 
-    /**
-     * @param  array<string, mixed>  $overrides
-     */
-    private function setProfileConfig(string $profile, array $overrides): void
+    public function test_database_profile_case_accent_and_numeric_names_are_exactly_distinct(): void
     {
-        $config = config('workdays');
-        $config['profiles'][$profile] = array_replace_recursive($config['profiles'][$profile], $overrides);
-
-        config()->set('workdays', $config);
+        $profiles = [];
+        $names = ['GLOBAL', 'global', 'cafe', 'café', '0', '00'];
+        foreach ($names as $index => $name) {
+            $profiles[$name] = $this->profile();
+            if ($index % 2 === 1) {
+                $profiles[$name]['custom_holidays']['2026-11-02'] = 'Only '.$name;
+            }
+        }
+        $repository = $this->publish($profiles);
+        $this->assertSame($profiles, $repository->current()->definitions['profiles']);
+        foreach ($names as $index => $name) {
+            $this->assertSame($index % 2 === 0, Workday::profile($name)->isBusinessDay('2026-11-02'));
+        }
     }
 
-    private function createRule(string $profile, string $calendarType, int $month, int $day): WorkdayHolidayRule
+    public function test_timestamp_holiday_key_cannot_create_duplicate_date_rows(): void
     {
-        return WorkdayHolidayRule::create([
-            'profile' => $profile,
-            'calendar_type' => $calendarType,
-            'month' => $month,
-            'day' => $day,
-            'title' => 'Database holiday',
-            'is_active' => true,
-        ]);
+        $repository = $this->publish(['global' => $this->profile()]);
+        $before = $repository->current();
+        $definitions = $before->definitions;
+        $definitions['profiles']['global']['custom_holidays'] = ['2026-11-02' => 'Date only', '2026-11-02 12:00:00' => 'Invalid duplicate timestamp'];
+        try {
+            $repository->publish($definitions, $before->revisionId);
+            $this->fail('Exact holiday keys must remain strict dates.');
+        } catch (InvalidArgumentException $error) {
+            $this->assertStringContainsString('custom_holidays', $error->getMessage());
+        }
+        $this->assertSame($before->revisionId, $repository->current()->revisionId);
+        $this->assertTrue(Workday::profile('global')->isBusinessDay('2026-11-02'));
     }
 
-    private function createSpecialDate(string $profile, string $date, string $type, string $title = 'Database special date'): WorkdaySpecialDate
+    private function publish(array $profiles, string $default = 'global'): DatabaseDefinitionRepository
     {
-        return WorkdaySpecialDate::create([
-            'profile' => $profile,
-            'date' => $date,
-            'type' => $type,
-            'title' => $title,
-            'is_active' => true,
-        ]);
+        $definitions = config('workdays.definitions');
+        $definitions['profiles'] = $profiles;
+        $definitions['default_profile'] = $default;
+        $repository = app(DatabaseDefinitionRepository::class);
+        $repository->publish($definitions, null);
+        config()->set('workdays.driver', 'database');
+
+        return $repository;
     }
 
-    /**
-     * @param  array<int, array<string, mixed>>  $reasons
-     * @return array<string, mixed>
-     */
+    private function profile(): array
+    {
+        return ['weekends' => ['Saturday', 'Sunday'], 'holidays' => ['gregorian' => [], 'jalali' => [], 'hijri' => []], 'custom_holidays' => [], 'extra_working_days' => []];
+    }
+
     private function reason(array $reasons, string $type): array
     {
         foreach ($reasons as $reason) {
-            if (($reason['type'] ?? null) === $type) {
+            if ($reason['type'] === $type) {
                 return $reason;
             }
         }
-
-        $this->fail(sprintf('Day reason [%s] was not found.', $type));
+        $this->fail('Day reason ['.$type.'] was not found.');
     }
 }

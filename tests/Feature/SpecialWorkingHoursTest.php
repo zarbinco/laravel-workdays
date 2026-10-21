@@ -12,16 +12,16 @@ use InvalidArgumentException;
 use PHPUnit\Framework\Attributes\DataProvider;
 use RuntimeException;
 use Zarbinco\LaravelWorkdays\Calculator\BusinessDayCalculator;
+use Zarbinco\LaravelWorkdays\Calendars\HijriCalendarAdapter;
+use Zarbinco\LaravelWorkdays\Calendars\JalaliCalendarAdapter;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlot;
 use Zarbinco\LaravelWorkdays\Data\DeliverySlotsResult;
 use Zarbinco\LaravelWorkdays\Data\Holiday;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Holidays\ConfigHolidayProvider;
 use Zarbinco\LaravelWorkdays\Holidays\HolidayProviderInterface;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
-use Zarbinco\LaravelWorkdays\Support\WorkingHours;
+use Zarbinco\LaravelWorkdays\Holidays\LogicalHolidayProvider;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
 final class SpecialWorkingHoursTest extends TestCase
@@ -31,10 +31,10 @@ final class SpecialWorkingHoursTest extends TestCase
         parent::setUp();
 
         config()->set('app.timezone', 'Pacific/Honolulu');
-        config()->set('workdays.default_profile', 'warehouse');
-        config()->set('workdays.storage.driver', 'config');
+        config()->set('workdays.definitions.default_profile', 'warehouse');
+        config()->set('workdays.driver', 'config');
         config()->set('workdays.max_scan_days', 14);
-        config()->set('workdays.profiles', ['warehouse' => $this->baseProfile()]);
+        config()->set('workdays.definitions.profiles', ['warehouse' => $this->baseProfile()]);
     }
 
     public function test_exact_date_hours_replace_regular_hours_and_leave_other_mondays_unchanged(): void
@@ -138,7 +138,7 @@ final class SpecialWorkingHoursTest extends TestCase
 
         $this->assertFalse($calculator->isBusinessDay($date));
         $this->assertSame([], $this->windows($calculator, $date));
-        config()->set('workdays.profiles.warehouse.extra_working_days', [$date => 'Reopened']);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days', [$date => 'Reopened']);
         $reopened = Workday::profile('warehouse');
         $this->assertTrue($reopened->isBusinessDay($date));
         $this->assertSame([['start' => '10:00', 'end' => '12:00']], $this->windows($reopened, $date));
@@ -241,7 +241,7 @@ final class SpecialWorkingHoursTest extends TestCase
 
         $this->assertSame([], $this->windows($closed, '2026-11-06'));
         $this->assertSame([], $this->windows($closed, '2026-11-07'));
-        config()->set('workdays.profiles.warehouse.extra_working_days', ['2026-11-06' => 'Owner reopened']);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days', ['2026-11-06' => 'Owner reopened']);
         $open = Workday::profile('warehouse');
         $this->assertSame([['start' => '22:00', 'end' => '24:00']], $this->windows($open, '2026-11-06'));
         $this->assertSame([['start' => '00:00', 'end' => '06:00']], $this->windows($open, '2026-11-07'));
@@ -381,7 +381,7 @@ final class SpecialWorkingHoursTest extends TestCase
     public function test_overnight_enablement_is_a_strict_boolean(mixed $enabled): void
     {
         $this->expectException(WorkdayConfigurationException::class);
-        $this->expectExceptionMessage('allow_overnight_working_hours');
+        $this->expectExceptionMessage(is_object($enabled) ? 'Definition profile [warehouse] must contain only arrays and scalar/null data' : 'allow_overnight_working_hours');
 
         $this->configure(['allow_overnight_working_hours' => $enabled]);
     }
@@ -535,7 +535,7 @@ final class SpecialWorkingHoursTest extends TestCase
     }
 
     #[DataProvider('ambiguousMidnightOperations')]
-    public function test_repeated_civil_midnight_fails_consistently_in_effective_window_apis(string $method): void
+    public function test_split_civil_midnight_fails_consistently_in_effective_window_apis(string $method): void
     {
         $calculator = $this->nightProfile(['weekends' => [], 'working_hours' => ['Saturday' => [['22:00', '06:00']]]]);
         $input = CarbonImmutable::parse('1988-10-30T03:30:00Z')->setTimezone('America/Goose_Bay');
@@ -547,8 +547,8 @@ final class SpecialWorkingHoursTest extends TestCase
         } catch (RuntimeException|InvalidArgumentException $exception) {
             $this->assertStringContainsString('warehouse', $exception->getMessage());
             $this->assertStringContainsString('1988-10-29', $exception->getMessage());
-            $this->assertStringContainsString('24:00', $exception->getMessage());
-            $this->assertStringContainsString('ambiguous', strtolower($exception->getMessage()));
+            $this->assertStringContainsString('America/Goose_Bay', $exception->getMessage());
+            $this->assertStringContainsString('moves backward across a civil-date label', $exception->getMessage());
         }
     }
 
@@ -608,51 +608,45 @@ final class SpecialWorkingHoursTest extends TestCase
         $calculator->nextBusinessTime($this->at('2026-11-02 08:00'));
     }
 
-    public function test_database_owner_holiday_prevents_shift_and_existing_calculator_storage_snapshot_is_preserved(): void
+    public function test_config_owner_holiday_prevents_shift_and_existing_calculator_definition_view_is_preserved(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'database');
-        $calculator = $this->nightProfile(['working_hours' => ['Friday' => [['22:00', '06:00']]]]);
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-06', 'type' => 'holiday', 'title' => 'Stored owner closure', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        $calculator = $this->nightProfile(['working_hours' => ['Friday' => [['22:00', '06:00']]], 'custom_holidays' => ['2026-11-06' => 'Configured owner closure']]);
 
         $this->assertSame([], $this->windows($calculator, '2026-11-07'));
         $this->assertSame([], $this->windows($calculator, '2026-11-06'));
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-06', 'type' => 'working_day', 'title' => 'Stored reopening', 'is_active' => true]);
+        config()->set('workdays.definitions.profiles.warehouse.extra_working_days', ['2026-11-06' => 'Configured reopening']);
         $this->assertSame([], $this->windows($calculator, '2026-11-07'));
         $newCalculator = Workday::profile('warehouse');
         $this->assertSame([['start' => '00:00', 'end' => '06:00']], $this->windows($newCalculator, '2026-11-07'));
     }
 
-    public function test_chain_provider_reopening_overrides_config_owner_holiday_for_special_shift(): void
+    public function test_config_reopening_overrides_its_owner_holiday_for_special_shift(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'chain');
+        $this->publishConflictingDatabaseDefinitions();
         $calculator = $this->nightProfile([
             'custom_holidays' => ['2026-11-06' => 'Configured closure'],
+            'extra_working_days' => ['2026-11-06' => 'Configured reopening'],
             'working_hours' => [], 'special_working_hours' => ['2026-11-06' => [['21:00', '05:00']]],
         ]);
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-06', 'type' => 'working_day', 'title' => 'Stored reopening', 'is_active' => true]);
 
         $this->assertSame([['start' => '21:00', 'end' => '24:00']], $this->windows($calculator, '2026-11-06'));
         $this->assertSame([['start' => '00:00', 'end' => '05:00']], $this->windows($calculator, '2026-11-07'));
     }
 
-    public function test_database_receiving_holiday_does_not_cancel_valid_carry_in(): void
+    public function test_config_receiving_holiday_does_not_cancel_valid_carry_in(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'database');
-        $calculator = $this->nightProfile(['working_hours' => ['Friday' => [['22:00', '06:00']]]]);
-        WorkdaySpecialDate::create(['profile' => 'warehouse', 'date' => '2026-11-07', 'type' => 'holiday', 'title' => 'Receiving closure', 'is_active' => true]);
+        $this->publishConflictingDatabaseDefinitions();
+        $calculator = $this->nightProfile(['working_hours' => ['Friday' => [['22:00', '06:00']]], 'custom_holidays' => ['2026-11-07' => 'Receiving closure']]);
 
         $this->assertSame([['start' => '00:00', 'end' => '06:00']], $this->windows($calculator, '2026-11-07'));
         $this->assertFalse($calculator->isBusinessDay('2026-11-07'));
     }
 
-    public function test_dense_overnight_slots_load_database_calendars_per_date_without_writes(): void
+    public function test_dense_config_overnight_slots_perform_no_database_access(): void
     {
-        $this->loadMigrationsFrom(dirname(__DIR__, 2).DIRECTORY_SEPARATOR.'database'.DIRECTORY_SEPARATOR.'migrations');
-        config()->set('workdays.storage.driver', 'database');
-        config()->set('workdays.profiles.warehouse', array_replace($this->baseProfile(), [
+        $this->publishConflictingDatabaseDefinitions();
+        config()->set('workdays.definitions.profiles.warehouse', array_replace($this->baseProfile(), [
             'allow_overnight_working_hours' => true,
             'working_hours' => ['Monday' => [['22:00', '06:00']], 'Tuesday' => [['22:00', '06:00']]],
         ]));
@@ -662,7 +656,7 @@ final class SpecialWorkingHoursTest extends TestCase
         $result = Workday::deliverySlots('2026-11-02T22:00:00Z', $this->slotOptions(['days' => 2, 'duration_minutes' => 30, 'step_minutes' => 5, 'max_slots' => 200]));
 
         $this->assertCount(105, $result->slots);
-        $this->assertCount(4, $connection->getQueryLog());
+        $this->assertCount(0, $connection->getQueryLog());
         foreach ($connection->getQueryLog() as $query) {
             $this->assertStringStartsWith('select', strtolower(ltrim($query['query'])));
         }
@@ -672,7 +666,7 @@ final class SpecialWorkingHoursTest extends TestCase
     public function test_phase_two_overnight_preparation_and_post_midnight_handoff_use_both_profiles(): void
     {
         $this->nightProfile();
-        config()->set('workdays.profiles.carrier', array_replace($this->baseProfile(), ['working_hours' => ['Tuesday' => [['01:00', '04:00']]], 'special_working_hours' => []]));
+        config()->set('workdays.definitions.profiles.carrier', array_replace($this->baseProfile(), ['working_hours' => ['Tuesday' => [['01:00', '04:00']]], 'special_working_hours' => []]));
         $plan = [
             'timezone' => 'UTC', 'profile_timezones' => ['warehouse' => 'UTC', 'carrier' => 'UTC'],
             'stages' => [
@@ -691,7 +685,7 @@ final class SpecialWorkingHoursTest extends TestCase
     public function test_phase_two_handoff_during_carry_in_waits_for_carrier_opening(): void
     {
         $this->nightProfile();
-        config()->set('workdays.profiles.carrier', array_replace($this->baseProfile(), ['working_hours' => ['Tuesday' => [['02:00', '04:00']]]]));
+        config()->set('workdays.definitions.profiles.carrier', array_replace($this->baseProfile(), ['working_hours' => ['Tuesday' => [['02:00', '04:00']]]]));
         $plan = ['timezone' => 'UTC', 'profile_timezones' => ['warehouse' => 'UTC', 'carrier' => 'UTC'], 'stages' => [['id' => 'handoff', 'type' => 'handoff', 'profiles' => ['warehouse', 'carrier']]]];
 
         $result = Workday::planDelivery('2026-11-02T23:00:00Z', $plan);
@@ -703,7 +697,7 @@ final class SpecialWorkingHoursTest extends TestCase
     {
         config()->set('workdays.max_scan_days', 2);
         $this->nightProfile();
-        config()->set('workdays.profiles.carrier', array_replace($this->baseProfile(), ['working_hours' => ['Tuesday' => [['06:00', '08:00']]]]));
+        config()->set('workdays.definitions.profiles.carrier', array_replace($this->baseProfile(), ['working_hours' => ['Tuesday' => [['06:00', '08:00']]]]));
         $plan = ['timezone' => 'UTC', 'profile_timezones' => ['warehouse' => 'UTC', 'carrier' => 'UTC'], 'stages' => [['id' => 'handoff', 'type' => 'handoff', 'profiles' => ['warehouse', 'carrier']]]];
         $this->expectException(RuntimeException::class);
 
@@ -854,10 +848,10 @@ final class SpecialWorkingHoursTest extends TestCase
         $this->assertInstanceOf(CarbonImmutable::class, $completion);
     }
 
-    public function test_legacy_profiles_do_not_gain_previous_day_provider_lookups(): void
+    public function test_daytime_profiles_do_not_gain_previous_day_provider_lookups(): void
     {
         $profile = $this->baseProfile();
-        $provider = new class(new ConfigHolidayProvider(['warehouse' => $profile])) implements HolidayProviderInterface
+        $provider = new class(new LogicalHolidayProvider(static fn (string $name): array => $profile)) implements HolidayProviderInterface
         {
             public array $dateEvaluations = [];
 
@@ -892,24 +886,25 @@ final class SpecialWorkingHoursTest extends TestCase
                 return $this->inner->hasExtraWorkingDay($profile, $date);
             }
         };
-        $calculator = new BusinessDayCalculator('warehouse', $profile, holidayProvider: $provider);
+        $calculator = new BusinessDayCalculator('warehouse', $profile, holidayProvider: $provider, includeStartDate: false, maxScanDays: 3660, jalaliCalendar: new JalaliCalendarAdapter, hijriCalendar: new HijriCalendarAdapter('umm_al_qura', 0));
 
         $this->assertSame([['start' => '09:00', 'end' => '17:00']], $this->windows($calculator, '2026-11-02'));
-        $this->assertSame(['2026-11-02', '2026-11-02', '2026-11-02'], $provider->dateEvaluations);
+        $this->assertSame(['2026-11-02', '2026-11-02'], $provider->dateEvaluations);
     }
 
-    public function test_false_only_flag_preserves_legacy_minute_arithmetic(): void
+    public function test_absent_and_false_flags_use_exact_fractional_minute_arithmetic(): void
     {
         $hours = ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]];
         $legacy = $this->configure(['working_hours' => $hours]);
         $falseOnly = $this->configure(['working_hours' => $hours, 'allow_overnight_working_hours' => false]);
         $input = $this->at('2026-11-02 09:59:30');
 
-        $this->assertSame('2026-11-02 11:01:00', $legacy->addBusinessMinutes($input, 1)->toDateTimeString());
-        $this->assertSame('2026-11-02 11:01:00', $falseOnly->addBusinessMinutes($input, 1)->toDateTimeString());
+        // Refactor 03 corrects the historical discarded partial minute (11:01:00).
+        $this->assertSame('2026-11-02 11:00:30', $legacy->addBusinessMinutes($input, 1)->toDateTimeString());
+        $this->assertSame('2026-11-02 11:00:30', $falseOnly->addBusinessMinutes($input, 1)->toDateTimeString());
     }
 
-    public function test_false_only_flag_preserves_legacy_windows_navigation_and_diff(): void
+    public function test_absent_and_false_flags_share_microsecond_navigation_and_total_difference(): void
     {
         $hours = ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]];
         $legacy = $this->configure(['working_hours' => $hours]);
@@ -929,42 +924,44 @@ final class SpecialWorkingHoursTest extends TestCase
         $this->assertSame([
             'windows' => [['start' => '09:00', 'end' => '10:00'], ['start' => '11:00', 'end' => '12:00']],
             'next_at_closing' => '2026-11-02 11:00:00.000000',
-            'previous_at_closing' => '2026-11-02 09:59:59.000000',
-            'diff' => 0, 'inside' => true, 'closed' => false,
+            'previous_at_closing' => '2026-11-02 09:59:59.999999',
+            'diff' => 1, 'inside' => true, 'closed' => false,
         ], $expected);
         $this->assertSame($expected, $snapshot($falseOnly));
     }
 
-    public function test_false_only_flag_preserves_legacy_holiday_provider_lookup_pattern(): void
+    public function test_absent_and_false_flags_share_date_local_holiday_provider_lookups(): void
     {
         $profile = $this->baseProfile();
         $legacyReads = $this->calendarLookupTrace($profile);
 
-        $this->assertSame(['extra:2026-11-02', 'extra:2026-11-02', 'holiday:2026-11-02'], $legacyReads);
+        $this->assertSame(['extra:2026-11-02', 'holiday:2026-11-02'], $legacyReads);
         $this->assertSame($legacyReads, $this->calendarLookupTrace($profile + ['allow_overnight_working_hours' => false]));
     }
 
-    #[DataProvider('enhancedPathConfigurations')]
-    public function test_enhanced_path_requires_true_or_explicit_schedule_overlays(array $profile, bool $expected): void
+    #[DataProvider('equivalentScheduleConfigurations')]
+    public function test_feature_keys_do_not_select_numerical_algorithms(array $profile): void
     {
-        $this->assertSame($expected, WorkingHours::hasEnhancedConfig($profile));
+        $calculator = $this->configure(array_replace(['working_hours' => ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]]], $profile));
+        $this->assertSame('2026-11-02 11:00:30.123456', $calculator->addBusinessMinutes($this->at('2026-11-02 09:59:30.123456'), 1)->format('Y-m-d H:i:s.u'));
+        $this->assertSame(1, $calculator->diffBusinessMinutes($this->at('2026-11-02 09:59:30'), $this->at('2026-11-02 11:00:30')));
     }
 
-    public static function enhancedPathConfigurations(): array
+    public static function equivalentScheduleConfigurations(): array
     {
         return [
-            'no new keys' => [[], false],
-            'false flag only' => [['allow_overnight_working_hours' => false], false],
-            'true flag only' => [['allow_overnight_working_hours' => true], true],
-            'exact hours with false flag' => [['allow_overnight_working_hours' => false, 'special_working_hours' => []], true],
-            'seasonal hours with false flag' => [['allow_overnight_working_hours' => false, 'seasonal_working_hours' => []], true],
-            'exact hours without flag' => [['special_working_hours' => []], true],
-            'seasonal hours without flag' => [['seasonal_working_hours' => []], true],
+            'no new keys' => [[]],
+            'false flag only' => [['allow_overnight_working_hours' => false]],
+            'true flag only' => [['allow_overnight_working_hours' => true]],
+            'exact hours with false flag' => [['allow_overnight_working_hours' => false, 'special_working_hours' => []]],
+            'seasonal hours with false flag' => [['allow_overnight_working_hours' => false, 'seasonal_working_hours' => []]],
+            'exact hours without flag' => [['special_working_hours' => []]],
+            'seasonal hours without flag' => [['seasonal_working_hours' => []]],
         ];
     }
 
     #[DataProvider('enhancedFlagConfigurations')]
-    public function test_true_flag_and_false_flag_with_overlays_retain_enhanced_scheduling(array $config, string $expected): void
+    public function test_overnight_permission_and_overlays_use_the_unified_schedule(array $config, string $expected): void
     {
         $calculator = $this->configure(array_replace(['working_hours' => ['Monday' => [['09:00', '10:00'], ['11:00', '12:00']]]], $config));
 
@@ -997,7 +994,7 @@ final class SpecialWorkingHoursTest extends TestCase
 
             return false;
         });
-        $calculator = new BusinessDayCalculator('warehouse', $profile, holidayProvider: $provider);
+        $calculator = new BusinessDayCalculator('warehouse', $profile, holidayProvider: $provider, includeStartDate: false, maxScanDays: 3660, jalaliCalendar: new JalaliCalendarAdapter, hijriCalendar: new HijriCalendarAdapter('umm_al_qura', 0));
         $this->windows($calculator, '2026-11-02');
 
         return $reads;
@@ -1016,7 +1013,7 @@ final class SpecialWorkingHoursTest extends TestCase
 
     private function configure(array $overrides): BusinessDayCalculator
     {
-        config()->set('workdays.profiles.warehouse', array_replace($this->baseProfile(), $overrides));
+        config()->set('workdays.definitions.profiles.warehouse', array_replace($this->baseProfile(), $overrides));
 
         return Workday::profile('warehouse');
     }

@@ -4,13 +4,11 @@ declare(strict_types=1);
 
 namespace Zarbinco\LaravelWorkdays\Tests\Feature;
 
-use Illuminate\Support\Facades\Artisan;
 use InvalidArgumentException;
 use RuntimeException;
 use Zarbinco\LaravelWorkdays\Data\TimeWindow;
 use Zarbinco\LaravelWorkdays\Exceptions\WorkdayConfigurationException;
 use Zarbinco\LaravelWorkdays\Facades\Workday;
-use Zarbinco\LaravelWorkdays\Models\WorkdaySpecialDate;
 use Zarbinco\LaravelWorkdays\Tests\TestCase;
 
 final class BusinessTimeTest extends TestCase
@@ -24,7 +22,7 @@ final class BusinessTimeTest extends TestCase
 
     public function test_facade_business_time_methods_use_default_profile(): void
     {
-        config()->set('workdays.default_profile', 'global');
+        config()->set('workdays.definitions.default_profile', 'global');
         $this->setGlobalWorkingHours($this->standardWorkingHours());
 
         $this->assertTrue(Workday::isBusinessTime('2026-06-29 10:00'));
@@ -154,11 +152,11 @@ final class BusinessTimeTest extends TestCase
         $this->assertSame('2026-12-28 09:00:00', Workday::profile('global')->nextBusinessTime('2026-12-25 10:00')->toDateTimeString());
     }
 
-    public function test_previous_business_time_returns_last_second_before_window_end(): void
+    public function test_previous_business_time_returns_last_microsecond_before_window_end(): void
     {
         $this->setGlobalWorkingHours($this->standardWorkingHours());
 
-        $this->assertSame('2026-06-29 16:59:59', Workday::profile('global')->previousBusinessTime('2026-06-29 17:00')->toDateTimeString());
+        $this->assertSame('2026-06-29 16:59:59.999999', Workday::profile('global')->previousBusinessTime('2026-06-29 17:00')->format('Y-m-d H:i:s.u'));
     }
 
     public function test_add_business_minutes_within_same_window(): void
@@ -239,7 +237,7 @@ final class BusinessTimeTest extends TestCase
         ]);
 
         $this->expectException(WorkdayConfigurationException::class);
-        $this->expectExceptionMessage('Invalid working_hours.Monday start time [9:00]');
+        $this->expectExceptionMessage('Invalid working_hours.1 start time [9:00]');
 
         Workday::profile('global');
     }
@@ -278,7 +276,7 @@ final class BusinessTimeTest extends TestCase
         ]);
 
         $this->expectException(WorkdayConfigurationException::class);
-        $this->expectExceptionMessage('Invalid working_hours weekday [Funday]');
+        $this->expectExceptionMessage('Invalid weekday name [Funday]');
 
         Workday::profile('global');
     }
@@ -339,35 +337,19 @@ final class BusinessTimeTest extends TestCase
         Workday::profile('global')->addBusinessHours('2026-06-29 09:00', 1.333);
     }
 
-    public function test_business_hours_respect_imported_official_iran_holiday(): void
+    public function test_business_hours_respect_exact_official_config_holiday(): void
     {
-        $this->loadWorkdayMigrations();
         $this->setIranWorkingHours();
-        config()->set('workdays.storage.driver', 'database');
-        Artisan::call('workdays:import-iran-calendar', [
-            'year' => 1405,
-            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
-        ]);
+        config()->set('workdays.definitions.profiles.iran.custom_holidays.2026-03-21', 'Official holiday');
 
         $this->assertFalse(Workday::profile('iran')->isBusinessTime('2026-03-21 10:00'));
     }
 
-    public function test_business_hours_respect_extra_working_day_over_imported_holiday(): void
+    public function test_business_hours_respect_extra_working_day_over_exact_config_holiday(): void
     {
-        $this->loadWorkdayMigrations();
         $this->setIranWorkingHours();
-        config()->set('workdays.storage.driver', 'database');
-        Artisan::call('workdays:import-iran-calendar', [
-            'year' => 1405,
-            '--calendar-path' => $this->createTemporaryIranOfficialCalendarFixture(),
-        ]);
-        WorkdaySpecialDate::create([
-            'profile' => 'iran',
-            'date' => '2026-03-21',
-            'type' => 'working_day',
-            'title' => 'Official compensation day',
-            'is_active' => true,
-        ]);
+        config()->set('workdays.definitions.profiles.iran.custom_holidays.2026-03-21', 'Official holiday');
+        config()->set('workdays.definitions.profiles.iran.extra_working_days.2026-03-21', 'Official compensation day');
 
         $this->assertTrue(Workday::profile('iran')->isBusinessTime('2026-03-21 10:00'));
     }
@@ -418,7 +400,7 @@ final class BusinessTimeTest extends TestCase
     private function setProfileConfig(string $profile, array $overrides): void
     {
         $config = config('workdays');
-        $config['profiles'][$profile] = array_replace_recursive($config['profiles'][$profile], $overrides);
+        $config['definitions']['profiles'][$profile] = array_replace_recursive($config['definitions']['profiles'][$profile], $overrides);
 
         config()->set('workdays', $config);
     }
